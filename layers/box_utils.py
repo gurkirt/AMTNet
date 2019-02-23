@@ -1,0 +1,339 @@
+import torch, pdb
+import numpy as np
+
+def point_form(boxes):
+    """ Convert prior_boxes to (xmin, ymin, xmax, ymax)
+    representation for comparison to point form ground truth data.
+    Args:
+        boxes: (tensor) center-size default boxes from priorbox layers.
+    Return:
+        boxes: (tensor) Converted xmin, ymin, xmax, ymax form of boxes.
+    """
+    return torch.cat((boxes[:, :2] - boxes[:, 2:]/2,     # xmin, ymin
+                     boxes[:, :2] + boxes[:, 2:]/2), 1)  # xmax, ymax
+
+
+def center_size(boxes):
+    """ Convert prior_boxes to (cx, cy, w, h)
+    representation for comparison to center-size form ground truth data.
+    Args:
+        boxes: (tensor) point_form boxes
+    Return:
+        boxes: (tensor) Converted xmin, ymin, xmax, ymax form of boxes.
+    """
+    return torch.cat((boxes[:, 2:] + boxes[:, :2])/2,  # cx, cy
+                     boxes[:, 2:] - boxes[:, :2], 1)  # w, h
+
+
+def intersect(box_a, box_b):
+    """ We resize both tensors to [A,B,2] without new malloc:
+    [A,2] -> [A,1,2] -> [A,B,2]
+    [B,2] -> [1,B,2] -> [A,B,2]
+    Then we compute the area of intersect between box_a and box_b.
+    Args:
+      box_a: (tensor) bounding boxes, Shape: [A,4].
+      box_b: (tensor) bounding boxes, Shape: [B,4].
+    Return:
+      (tensor) intersection area, Shape: [A,B].
+    """
+    A = box_a.size(0)
+    B = box_b.size(0)
+    max_xy = torch.min(box_a[:, 2:].unsqueeze(1).expand(A, B, 2),
+                       box_b[:, 2:].unsqueeze(0).expand(A, B, 2))
+    min_xy = torch.max(box_a[:, :2].unsqueeze(1).expand(A, B, 2),
+                       box_b[:, :2].unsqueeze(0).expand(A, B, 2))
+    inter = torch.clamp((max_xy - min_xy), min=0)
+    return inter[:, :, 0] * inter[:, :, 1]
+
+
+def jaccard(box_a, box_b):
+    """Compute the jaccard overlap of two sets of boxes.  The jaccard overlap
+    is simply the intersection over union of two boxes.  Here we operate on
+    ground truth boxes and default boxes.
+    E.g.:
+        A ∩ B / A ∪ B = A ∩ B / (area(A) + area(B) - A ∩ B)
+    Args:
+        box_a: (tensor) Ground truth bounding boxes, Shape: [num_objects,4]
+        box_b: (tensor) Prior boxes from priorbox layers, Shape: [num_priors,4]
+    Return:
+        jaccard overlap: (tensor) Shape: [box_a.size(0), box_b.size(0)]
+    """
+    inter = intersect(box_a, box_b)
+    area_a = ((box_a[:, 2]-box_a[:, 0]) *
+              (box_a[:, 3]-box_a[:, 1])).unsqueeze(1).expand_as(inter)  # [A,B]
+    area_b = ((box_b[:, 2]-box_b[:, 0]) *
+              (box_b[:, 3]-box_b[:, 1])).unsqueeze(0).expand_as(inter)  # [A,B]
+    union = area_a + area_b - inter
+    return inter / union  # [A,B]
+
+
+
+
+def get_ovlp_cellwise(overlaps):
+    feature_maps = [38, 19, 10, 5, 3, 1]
+    aratios = [4, 6, 6, 6, 4, 4]
+    dim = 0
+    for f in feature_maps:
+        dim += f*f
+    out_ovlp = np.zeros(dim)
+    count = 0
+    st = 0
+    for k, f in enumerate(feature_maps):
+        ar = aratios[k]
+        for i in range(f*f):
+            et = st+ar
+            ovlps_tmp = overlaps[0, st:et]
+            #pdb.set_trace()
+            out_ovlp[count] = max(ovlps_tmp)
+            count += 1
+            st = et
+    assert count == dim
+
+    return out_ovlp
+
+
+def match_for_tm(truths, priors, threshold=0.2):
+
+    # pdb.set_trace()
+    #print(truths.size(), priors.size())
+    seq_overlaps1 =[]
+    overlaps1 = jaccard(truths[0, :].unsqueeze(0), point_form(priors))
+    overlaps2 = jaccard(truths[1, :].unsqueeze(0), point_form(priors))
+    overlaps1 = get_ovlp_cellwise(overlaps1)
+    overlaps2 = get_ovlp_cellwise(overlaps2)
+    indexs1 = (overlaps1 >= threshold).nonzero()
+    indexs2 = (overlaps2 >= threshold).nonzero()
+    overlaps1 = overlaps1[indexs1]
+    overlaps2 = overlaps2[indexs2]
+    return  indexs1,overlaps1,indexs2,overlaps2
+
+def avg_multi_match(threshold, truths, priors, labels, variances, loc_t, conf_t, idx, num_mt, seq_len):
+
+    # pdb.set_trace()
+    seq_overlaps =[]
+    inds = torch.cuda.LongTensor([m*seq_len for m in range(num_mt)])  ## get indexes of first frame in seq for each microtube
+    labels = labels[inds]
+    for s in range(seq_len):
+        seq_overlaps.append(jaccard(truths[inds+s, :], point_form(priors[:, s*4:(s+1)*4])))
+
+    overlaps = seq_overlaps[0]
+    ## Compute average overlap
+    for s in range(seq_len-1):
+        overlaps += seq_overlaps[s+1]
+    overlaps /= float(seq_len)
+    # (Bipartite Matching)
+    # [1,num_objects] best prior for each ground truth
+    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
+    # [1,num_priors] best ground truth for each prior
+    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
+    best_truth_idx.squeeze_(0)
+    best_truth_overlap.squeeze_(0)
+    best_prior_idx.squeeze_(1)
+    best_prior_overlap.squeeze_(1)
+    best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
+    # TODO refactor: index  best_prior_idx with long tensor
+    # ensure every gt matches with its prior of max overlap
+    for j in range(best_prior_idx.size(0)):
+        best_truth_idx[best_prior_idx[j]] = j
+
+    conf = labels[best_truth_idx] + 1         # Shape: [num_priors]
+    conf[best_truth_overlap < threshold] = 0  # label as background
+
+    for s in range(seq_len):
+        st = truths[inds + s, :]
+        matches = st[best_truth_idx]  # Shape: [num_priors,4]
+        if s == 0:
+            loc = encode(matches, priors[:, s * 4:(s + 1) * 4],
+                         variances)  # Shape: [num_priors, 4] -- encode the gt boxes for frame i
+        else:
+            temp = encode(matches, priors[:, s * 4:(s + 1) * 4], variances)
+            loc = torch.cat([loc, temp], 1)  # shape: [num_priors x 4 * seql_len] : stacking the location targets for different frames
+
+    loc_t[idx] = loc    # [num_priors,4] encoded offsets to learn
+    conf_t[idx] = conf  # [num_priors] top class label for each prior
+
+
+def independent_multi_match(threshold, truths, priors, labels, variances, loc_t, conf_t, idx, num_mt, seq_len):
+
+    # pdb.set_trace()
+    seq_overlaps =[]
+    inds = torch.cuda.LongTensor([m*seq_len for m in range(num_mt)])  ## get indexes of first frame in seq for each microtube
+    labels = labels[inds]
+    for s in range(seq_len):
+        seq_overlaps.append(jaccard(truths[inds+s, :], point_form(priors[:, s*4:(s+1)*4])))
+
+    overlaps = seq_overlaps[0]
+    ## Compute average overlap
+    for s in range(seq_len-1):
+        overlaps += seq_overlaps[s+1]
+    overlaps /= float(seq_len)
+    # (Bipartite Matching)
+    # [1,num_objects] best prior for each ground truth
+    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
+    # [1,num_priors] best ground truth for each prior
+    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
+    best_truth_idx.squeeze_(0)
+    best_truth_overlap.squeeze_(0)
+    best_prior_idx.squeeze_(1)
+    best_prior_overlap.squeeze_(1)
+    best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
+    # TODO refactor: index  best_prior_idx with long tensor
+    # ensure every gt matches with its prior of max overlap
+    best_truth_idx_copy = best_truth_idx.clone()
+    for j in range(best_prior_idx.size(0)):
+        best_truth_idx[best_prior_idx[j]] = j
+
+    conf = labels[best_truth_idx] + 1         # Shape: [num_priors]
+    conf[best_truth_overlap < threshold] = 0  # label as background
+
+    for s in range(seq_len):
+        st = truths[inds + s, :]
+        matches = st[best_truth_idx]  # Shape: [num_priors,4]
+        if s == 0:
+            loc = encode(matches, priors[:, s * 4:(s + 1) * 4],
+                         variances)  # Shape: [num_priors, 4] -- encode the gt boxes for frame i
+        else:
+            temp = encode(matches, priors[:, s * 4:(s + 1) * 4], variances)
+            loc = torch.cat([loc, temp], 1)  # shape: [num_priors x 4 * seql_len] : stacking the location targets for different frames
+
+    loc_t[idx] = loc    # [num_priors,4] encoded offsets to learn
+    conf_t[idx] = conf  # [num_priors] top class label for each prior
+
+
+def encode(matched, priors, variances):
+    """Encode the variances from the priorbox layers into the ground truth boxes
+    we have matched (based on jaccard overlap) with the prior boxes.
+    Args:
+        matched: (tensor) Coords of ground truth for each prior in point-form
+            Shape: [num_priors, 4].
+        priors: (tensor) Prior boxes in center-offset form
+            Shape: [num_priors,4].
+        variances: (list[float]) Variances of priorboxes
+    Return:
+        encoded boxes (tensor), Shape: [num_priors, 4]
+    """
+
+    # dist b/t match center and prior's center
+    g_cxcy = (matched[:, :2] + matched[:, 2:])/2 - priors[:, :2]
+    # encode variance
+    g_cxcy /= (variances[0] * priors[:, 2:])
+    # match wh / prior wh
+    g_wh = (matched[:, 2:] - matched[:, :2]) / priors[:, 2:]
+    g_wh = torch.log(g_wh) / variances[1]
+    # return target for smooth_l1_loss
+    return torch.cat([g_cxcy, g_wh], 1)  # [num_priors,4]
+
+
+# Adapted from https://github.com/Hakuyume/chainer-ssd
+def decode(loc, priors, variances):
+    """Decode locations from predictions using priors to undo
+    the encoding we did for offset regression at train time.
+    Args:
+        loc (tensor): location predictions for loc layers,
+            Shape: [num_priors,4]
+        priors (tensor): Prior boxes in center-offset form.
+            Shape: [num_priors,4].
+        variances: (list[float]) Variances of priorboxes
+    Return:
+        decoded bounding box predictions
+    """
+    #pdb.set_trace()
+    boxes = torch.cat((
+        priors[:, :2] + loc[:, :2] * variances[0] * priors[:, 2:],
+        priors[:, 2:] * torch.exp(loc[:, 2:] * variances[1])), 1)
+    boxes[:, :2] -= boxes[:, 2:] / 2
+    boxes[:, 2:] += boxes[:, :2]
+    return boxes
+
+
+# Adapted from https://github.com/Hakuyume/chainer-ssd
+def decode_seq(loc, priors, variances, seq_len):
+    boxes = []
+    #print('variances', variances)
+    for s in range(seq_len):
+        if s == 0:
+            boxes = decode(loc[:, :4], priors[:, :4], variances)
+        else:
+            boxes = torch.cat((boxes,decode(loc[:,s*4:(s+1)*4], priors[:,s*4:(s+1)*4], variances)),1)
+
+    return boxes
+
+def log_sum_exp(x):
+    """Utility function for computing log_sum_exp while determining
+    This will be used to determine unaveraged confidence loss across
+    all examples in a batch.
+    Args:
+        x (Variable(tensor)): conf_preds from conf layers
+    """
+    x_max = x.data.max()
+    return torch.log(torch.sum(torch.exp(x-x_max), 1, keepdim=True)) + x_max
+
+
+# Original author: Francisco Massa:
+# https://github.com/fmassa/object-detection.torch
+# Ported to PyTorch by Max deGroot (02/01/2017)
+def nms(boxes, scores, overlap=0.5, top_k=200):
+    """Apply non-maximum suppression at test time to avoid detecting too many
+    overlapping bounding boxes for a given object.
+    Args:
+        boxes: (tensor) The location preds for the img, Shape: [num_priors,4].
+        scores: (tensor) The class predscores for the img, Shape:[num_priors].
+        overlap: (float) The overlap thresh for suppressing unnecessary boxes.
+        top_k: (int) The Maximum number of box preds to consider.
+    Return:
+        The indices of the kept boxes with respect to num_priors.
+    """
+
+    keep = scores.new(scores.size(0)).zero_().long()
+    if boxes.numel() == 0:
+        return keep
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    area = torch.mul(x2 - x1, y2 - y1)
+    v, idx = scores.sort(0)  # sort in ascending order
+    # I = I[v >= 0.01]
+    idx = idx[-top_k:]  # indices of the top-k largest vals
+    xx1 = boxes.new()
+    yy1 = boxes.new()
+    xx2 = boxes.new()
+    yy2 = boxes.new()
+    w = boxes.new()
+    h = boxes.new()
+
+    # keep = torch.Tensor()
+    count = 0
+    while idx.numel() > 0:
+        i = idx[-1]  # index of current largest val
+        # keep.append(i)
+        keep[count] = i
+        count += 1
+        if idx.size(0) == 1:
+            break
+        idx = idx[:-1]  # remove kept element from view
+        # load bboxes of next highest vals
+        torch.index_select(x1, 0, idx, out=xx1)
+        torch.index_select(y1, 0, idx, out=yy1)
+        torch.index_select(x2, 0, idx, out=xx2)
+        torch.index_select(y2, 0, idx, out=yy2)
+        # store element-wise max with next highest score
+        xx1 = torch.clamp(xx1, min=x1[i])
+        yy1 = torch.clamp(yy1, min=y1[i])
+        xx2 = torch.clamp(xx2, max=x2[i])
+        yy2 = torch.clamp(yy2, max=y2[i])
+        w.resize_as_(xx2)
+        h.resize_as_(yy2)
+        w = xx2 - xx1
+        h = yy2 - yy1
+        # check sizes of xx1 and xx2.. after each iteration
+        w = torch.clamp(w, min=0.0)
+        h = torch.clamp(h, min=0.0)
+        inter = w*h
+        # IoU = i / (area(a) + area(b) - i)
+        rem_areas = torch.index_select(area, 0, idx)  # load remaining areas)
+        union = (rem_areas - inter) + area[i]
+        IoU = inter/union  # store result in iou
+        # keep only elements with an IoU <= overlap
+        idx = idx[IoU.le(overlap)]
+    return keep, count
