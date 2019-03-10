@@ -1,5 +1,5 @@
 import torch.nn as nn
-import torch, math
+import torch, math, pdb
 from torch.autograd import Variable
 
 class SpatialPool(nn.Module):
@@ -10,22 +10,24 @@ class SpatialPool(nn.Module):
         self.amd0 = amd0
         self.kd = kd
         self.padding = nn.ReplicationPad2d(1).cuda()
+        with torch.no_grad():
+            ww = hh = int(math.sqrt(amd0))
+            counts = torch.LongTensor(amd0,kd*kd)
+            v = [[(hh+2)*i + j for j in range(ww+2)] for i in range(hh+2)]
+            count = 0
+            # pdb.set_trace()
+            # print(counts.size())
+            for h in range(1,hh+1):
+                for w in range(1, ww+1):
+                    temp =  torch.LongTensor([v[h - 1][w - 1], v[h - 1][w], v[h - 1][w + 1],
+                                                        v[h][w - 1], v[h][w], v[h][w + 1],
+                                                        v[h + 1][w - 1], v[h + 1][w], v[h + 1][w + 1]])
+                    # print(temp.min())
+                    counts[count, :] = temp
+                    count = count + 1
 
-        ww = hh = int(math.sqrt(amd0))
-        counts = torch.LongTensor(amd0,kd*kd)
-        v = [[(hh+2)*i + j for j in range(ww+2)] for i in range(hh+2)]
-        count = 0
-        # pdb.set_trace()
-        # print(v)
-        # print(vals,ww)
-        for h in range(1,hh+1):
-            for w in range(1, ww+1):
-                counts[count, :] = torch.LongTensor([v[h - 1][w - 1], v[h - 1][w], v[h - 1][w + 1],
-                                                    v[h][w - 1], v[h][w], v[h][w + 1],
-                                                    v[h + 1][w - 1], v[h + 1][w], v[h + 1][w + 1]])
-                count += 1
-
-        counts = counts.cuda()
+            counts = counts.cuda()
+        counts.requires_grad = False
         self.register_buffer("counts", counts)
 
     def forward(self, fm):
@@ -34,9 +36,10 @@ class SpatialPool(nn.Module):
         fm = fm.permute(0, 2, 3, 1).contiguous()
         fm = fm.view(fm.size(0), -1, fm.size(3))
         #print('fm size and max ', fm.size(), torch.max(self.counts))
-        pfm = fm.index_select(1,Variable(self.counts[:,0]))
+        pfm = fm.index_select(1, self.counts[:,0])
         for h in range(1, self.kd*self.kd):
-            pfm = torch.cat((pfm,fm.index_select(1, Variable(self.counts[:, h]))),2)
-        #print('pfm size:::::::: ', pfm.size())
+            temp = fm.index_select(1, self.counts[:, h])
+            pfm = torch.cat((pfm, temp),2)
+            
         return pfm
 

@@ -1,8 +1,9 @@
 """ 
+
 Author: Gurkirt Singh 
 Modified from https://github.com/gurkirt/realtime-action-detection
-
 Licensed under The MIT License [see LICENSE for details]
+
 """
 
 
@@ -14,16 +15,19 @@ import torch.nn.init as init
 import argparse
 from torch.autograd import Variable
 import torch.utils.data as data
-from data import v2, ActionDetection, AnnotationTransform, detection_collate, CLASSES, BaseTransform
+from data import v2, ActionDetection, NormliseBoxes, detection_collate, CLASSES, BaseTransform
 from utils.augmentations import SSDAugmentation
-from layers.modules import MultiBoxLoss
-from ssd import SSD
+from layers.modules import MultiboxLoss
+from layers.functions import PriorBox
+from layers import MatchPrior
+from AMTNet import AMTNet
 import numpy as np
-import time
+import time, pdb
 from utils.evaluation import evaluate_detections
 from layers.box_utils import nms, decode_seq
 from utils import  AverageMeter
 from torch.optim.lr_scheduler import MultiStepLR
+# from torchviz import make_dot, make_dot_from_trace
 
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
@@ -56,9 +60,9 @@ parser.add_argument('--stepvalues', default='10000,30000', type=str, help='step 
 parser.add_argument('--weight_decay', default=1e-4, type=float, help='Weight decay for SGD')
 parser.add_argument('--gamma', default=0.1, type=float, help='Gamma update for SGD at for stepwise schedule')
 parser.add_argument('--visdom', default=False, type=str2bool, help='Use visdom to for loss visualization')
-parser.add_argument('--vis_port', default=8097, type=int, help='Port for Visdom Server')
-parser.add_argument('--data_root', default='/mnt/mars-fast/datasets/', help='Location of where in data is located like images and annotation file')
-parser.add_argument('--save_root', default='/mnt/mars-gamma/', help='Location to where we wanr save the checkpoints of models')
+parser.add_argument('--vis_port', default=8095, type=int, help='Port for Visdom Server')
+parser.add_argument('--data_root', default='/mnt/sun-gamma/', help='Location of where in data is located like images and annotation file')
+parser.add_argument('--save_root', default='/mnt/sun-gamma/', help='Location to where we wanr save the checkpoints of models')
 parser.add_argument('--iou_thresh', default=0.5, type=float, help='Evaluation threshold')
 parser.add_argument('--conf_thresh', default=0.01, type=float, help='Confidence threshold for evaluation')
 parser.add_argument('--nms_thresh', default=0.45, type=float, help='NMS threshold')
@@ -75,7 +79,7 @@ if hostname == 'mars':
     args.data_root = '/mnt/mars-fast/datasets/'
     args.save_root = '/mnt/mars-gamma/'
     args.vis_port = 8097
-elif hostname == 'sun':
+elif hostname in ['sun']:
     args.data_root = '/mnt/sun-gamma/'
     args.save_root = '/mnt/sun-gamma/'
     args.vis_port = 8096
@@ -84,50 +88,59 @@ elif hostname == 'mercury':
     args.save_root = '/mnt/mercury-beta/'
     args.vis_port = 8098
 
+# python train.py --seq_len=2 --num_workers=4 --batch_size=16 --ngpu=2 --fusion_type=NONE --input_type_base=brox --input_frames_base=5 --stepvalues=30000,50000 --max_iter=60000 --eval_step=10000 --lr=0.001 
 
 torch.set_default_tensor_type('torch.FloatTensor')
-## set random seeds
 np.random.seed(args.man_seed)
 torch.manual_seed(args.man_seed)
 if args.cuda:
     torch.cuda.manual_seed_all(args.man_seed)
 
+def print_node(gdf):
+    node_fns = gdf.next_functions
+    for fn in node_fns:
+        print(fn)
+        print_node(fn[0][0])
+    
 
 def main():
     args.cfg = v2
     args.train_sets = 'train'
     args.test_sets = 'test'
     kd = 3
-    args.means = (104, 117, 123)  # only support voc now
-    num_classes = len(CLASSES[args.dataset]) + 1
+    args.means = (104, 117, 123)  
+    num_classes = len(CLASSES[args.dataset]) + 1 # only support multiclass datasets, not multilabel
     args.num_classes = num_classes
     args.stepvalues = [int(val) for val in args.stepvalues.split(',')]
     args.loss_reset_step = 30
     # args.eval_step = 30000
     args.print_step = 10
-    args.fusion = args.fusion_type in ['SUM','CAT','MEAN','sum','cat','mean']
+    args.fusion_type = args.fusion_type.upper()
+    args.fusion = args.fusion_type in ['SUM','CAT','MEAN']
     ## Define the experiment Name will used for save directory and ENV for visdom
-    if args.fusion:
-        args.exp_name = 'AMTNet-{}-s{:d}-{}-{}-sl{:02d}sg{:02d}-lr-{:05d}'.format(args.dataset, args.train_split,
-                                                                                args.fusion_type, args.input_type_base,
-                                                                                args.seq_len, args.seq_gap, int(args.lr * 100000))
+    if not args.fusion:
+        args.exp_name = 'AMTNet-{}-s{:d}-{}-sl{:02d}sg{:02d}-bs{:02d}-lr{:05d}'.format(args.dataset, args.train_split,
+                                                                                args.input_type_base.upper(),
+                                                                                args.seq_len, args.seq_gap, 
+                                                                                args.batch_size, int(args.lr * 100000))
     else:
-        args.exp_name = 'AMTNet-{}-s{:d}-{}-{}-{}-sl{:02d}sg{:02d}-lr-{:05d}'.format(args.dataset, args.train_split,
+        args.exp_name = 'AMTNet-{}-s{:d}-{}-{}-{}-sl{:02d}sg{:02d}-bs{:02d}-lr{:05d}'.format(args.dataset, args.train_split,
                                                                                 args.fusion_type, args.input_type_base,
                                                                                 args.input_type_extra,
-                                                                                args.seq_len, args.seq_gap, int(args.lr * 100000))
+                                                                                args.seq_len, args.seq_gap, 
+                                                                                args.batch_size,int(args.lr * 100000))
 
     args.data_root += args.dataset + '/'
     args.save_root += args.dataset + '/'
 
-    num_feat_multiplier = {'cat': 2, 'sum': 1, 'mean': 1, 'CAT': 2, 'SUM': 1, 'MEAN': 1, 'NONE': 2, 'none': 1}
+    num_feat_multiplier = {'CAT': 2, 'SUM': 1, 'MEAN': 1, 'NONE': 1}
     # fusion type can one of the above keys
     args.fmd = [512, 1024, 512, 256, 256, 256]
     args.kd = 3
     args.fusion_num_muliplier = num_feat_multiplier[args.fusion_type]
 
     ## DEFINE THE NETWORK
-    net = SSD(args)
+    net = AMTNet(args)
 
     
     if args.fusion:
@@ -136,6 +149,9 @@ def main():
         print('Loading base network...')
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
         net.core_extra.load_my_state_dict(extra_weights, input_frames=args.input_frames_extra)
+    else:
+        base_weights = torch.load(args.save_root +'/weights/vgg_ucf24_{}_s{}.pth'.format(args.input_type_base, args.train_split))
+        net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
 
     net = net.cuda()
 
@@ -176,19 +192,22 @@ def main():
         if name.find('vgg')> -1 or name.find('extra')>-1 or name.find('L2Norm')>-1:
             mult = mult/args.seq_len
 
-        print(name, 'layer parameters will be trained @ {}'.format(args.lr*mult))
+        # print(name, 'layer parameters will be trained @ {}'.format(args.lr*mult))
         params += [{'params':[param], 'lr': args.lr*mult, 'weight_decay':args.weight_decay*decay}]
 
     optimizer = optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    criterion = MultiBoxLoss(args.num_classes, 0.5, 3, 0.5, args.cuda,
-                             seq_len=args.seq_len, bs=args.batch_size)
+    criterion = MultiboxLoss()
 
-    #criterion = MultiBoxLoss(args.num_classes, 0.5, True, 0, True, 3, 0.5, False, args.cuda)
     scheduler = MultiStepLR(optimizer, milestones=args.stepvalues, gamma=args.gamma)
-    train(args, net, optimizer, criterion, scheduler)
+    with torch.no_grad():
+        priorbox = PriorBox(v2, args.seq_len)
+        priors = priorbox.forward()
+    priors.requires_grad = False
+    # with torch.autograd.set_detect_anomaly(True):
+    train(args, net, priors, optimizer, criterion, scheduler)
 
 
-def train(args, net, optimizer, criterion, scheduler):
+def train(args, net, priors, optimizer, criterion, scheduler):
     log_file = open(args.save_root+"training.log", "w", 1)
     log_file.write(args.exp_name+'\n')
     for arg in vars(args):
@@ -204,13 +223,13 @@ def train(args, net, optimizer, criterion, scheduler):
 
     print('Loading Dataset...')
     train_dataset = ActionDetection(args, args.train_sets, SSDAugmentation(args.ssd_dim, args.means),
-                                    AnnotationTransform(), split=args.train_split)
+                                    NormliseBoxes(), anno_transform=MatchPrior(priors, args.cfg['variance']))
     log_file.write(train_dataset.print_str)
     print(train_dataset.print_str)
     val_dataset = ActionDetection(args, args.test_sets, BaseTransform(args.ssd_dim, args.means),
-                                  AnnotationTransform(), split=args.train_split, full_test=False)
+                                  NormliseBoxes(), full_test=False)
     log_file.write(val_dataset.print_str)
-    print(val_dataset.print_str)
+    # print(val_dataset.print_str)
     epoch_size = len(train_dataset) // args.batch_size
 
     print('Training SSD on', train_dataset.name)
@@ -262,22 +281,25 @@ def train(args, net, optimizer, criterion, scheduler):
             batch_iterator = iter(train_data_loader)
 
         # load train data
-        images, targets, num_mt, img_indexs = next(batch_iterator)
-
-        images = [Variable(img.cuda()) for img in images]
-        targets = [Variable(anno.cuda(), volatile=True) for anno in targets]
+        images, _ , prior_gt_labels, prior_gt_locations, _, _ = next(batch_iterator)
+        # pdb.set_trace()
+        images = [img.cuda(0, non_blocking=True) for img in images if not isinstance(img, list)]
+        prior_gt_labels = prior_gt_labels.cuda(0, non_blocking=True)
+        prior_gt_locations = prior_gt_locations.cuda(0, non_blocking=True)
         # forward
-        out = net(images)
+        cls_out, reg_out = net(images)
 
-        #pdb.set_trace()
         optimizer.zero_grad()
-        loss_l, loss_c = criterion(out, targets, num_mt)
+        loss_l, loss_c = criterion(cls_out, reg_out, prior_gt_labels, prior_gt_locations)
         loss = loss_l + loss_c
+
         loss.backward()
         optimizer.step()
         scheduler.step()
-        loc_loss = loss_l.data[0]
-        conf_loss = loss_c.data[0]
+
+        # pdb.set_trace()
+        loc_loss = loss_l.item()
+        conf_loss = loss_c.item()
         # print('Loss data type ',type(loc_loss))
         loc_losses.update(loc_loss)
         cls_losses.update(conf_loss)
@@ -312,9 +334,6 @@ def train(args, net, optimizer, criterion, scheduler):
             log_file.write(print_line+'\n')
             print(print_line)
 
-            # if args.visdom and args.send_images_to_visdom:
-            #     random_batch_index = np.random.randint(images.size(0))
-            #     viz.image(images.data[random_batch_index].cpu().numpy())
             itr_count += 1
 
             if itr_count % args.loss_reset_step == 0 and itr_count > 0:
@@ -330,11 +349,11 @@ def train(args, net, optimizer, criterion, scheduler):
             torch.cuda.synchronize()
             tvs = time.perf_counter()
             print('Saving state, iter:', iteration)
-            torch.save(net.state_dict(), args.save_root+'ssd300_ucf24_' +
+            torch.save(net.state_dict(), args.save_root+'AMTNet_' +
                        repr(iteration) + '.pth')
 
             net.eval() # switch net to evaluation mode
-            mAP, ap_all, ap_strs = validate(args, net, val_data_loader, val_dataset, iteration, iou_thresh=args.iou_thresh)
+            mAP, ap_all, ap_strs = validate(args, net, priors, val_data_loader, val_dataset, iteration, iou_thresh=args.iou_thresh)
 
             for ap_str in ap_strs:
                 print(ap_str)
@@ -363,12 +382,12 @@ def train(args, net, optimizer, criterion, scheduler):
     log_file.close()
 
 
-def validate(args, net, val_data_loader, val_dataset, iteration_num, iou_thresh=0.5):
+def validate(args, net, priors, val_data_loader, val_dataset, iteration_num, iou_thresh=0.5):
     """Test a SSD network on an image database."""
     print('Validating at ', iteration_num)
     num_images = len(val_dataset)
     num_classes = args.num_classes
-
+    priors = priors.cuda()
     det_boxes = [[] for _ in range(len(CLASSES[args.dataset]))]
     gt_boxes = []
     print_time = True
@@ -378,85 +397,84 @@ def validate(args, net, val_data_loader, val_dataset, iteration_num, iou_thresh=
     torch.cuda.synchronize()
     ts = time.perf_counter()
     softmax = nn.Softmax().cuda()
-    for val_itr in range(len(val_data_loader)):
-        if not batch_iterator:
-            batch_iterator = iter(val_data_loader)
+    with torch.no_grad():
+        for val_itr in range(len(val_data_loader)):
+            if not batch_iterator:
+                batch_iterator = iter(val_data_loader)
 
-        torch.cuda.synchronize()
-        t1 = time.perf_counter()
-
-        images, targets, num_mt, img_indexs = next(batch_iterator)
-        batch_size = images[0].size(0)
-        #images = images.permute(1, 0, 2, 3, 4)
-        height, width = images[0].size(3), images[0].size(4)
-
-        images = [Variable(img.cuda(), volatile=True) for img in images]
-        output = net(images)
-
-        loc_data = output[0]
-        conf_preds = output[1]
-        prior_data = output[2][:loc_data.size(1), :]
-        #pdb.set_trace()
-        if print_time and val_itr%val_step == 0:
             torch.cuda.synchronize()
-            tf = time.perf_counter()
-            print('Forward Time {:0.3f}'.format(tf-t1))
-        for b in range(batch_size):
-            # pdb.set_trace()
-            inds = np.asarray([m*args.seq_len for m in range(num_mt[b])])
-            gt = targets[b].numpy()
-            gt = gt[inds]
-            gt[:,0] *= width
-            gt[:,2] *= width
-            gt[:,1] *= height
-            gt[:,3] *= height
-            gt_boxes.append(gt)
-            decoded_boxes = decode_seq(loc_data[b].data, prior_data.data, args.cfg['variance'], args.seq_len)
-            decoded_boxes = decoded_boxes[:,:4].clone()
+            t1 = time.perf_counter()
 
-            conf_scores = softmax(conf_preds[b]).data.clone()
+            images, ground_truths, _ , _, num_mt, img_indexs = next(batch_iterator)
+            batch_size = images[0].size(0)
+            #images = images.permute(1, 0, 2, 3, 4)
+            height, width = images[0].size(3), images[0].size(4)
 
-            for cl_ind in range(1, num_classes):
-                scores = conf_scores[:, cl_ind].squeeze()
-                c_mask = scores.gt(args.conf_thresh)  # greater than minmum threshold
-                scores = scores[c_mask].squeeze()
-                # print('scores size',scores.size())
-                if scores.dim() == 0:
-                    # print(len(''), ' dim ==0 ')
-                    det_boxes[cl_ind - 1].append(np.asarray([]))
-                    continue
-                boxes = decoded_boxes.clone()
-                l_mask = c_mask.unsqueeze(1).expand_as(boxes)
-                boxes = boxes[l_mask].view(-1, 4)
-                # idx of highest scoring and non-overlapping boxes per class
-                ids, counts = nms(boxes, scores, args.nms_thresh, args.topk)  # idsn - ids after nms
-                scores = scores[ids[:counts]].cpu().numpy()
-                boxes = boxes[ids[:counts]].cpu().numpy()
-                # print('boxes sahpe',boxes.shape)
-                boxes[:,0] *= width
-                boxes[:,2] *= width
-                boxes[:,1] *= height
-                boxes[:,3] *= height
+            images = [img.cuda(0, non_blocking=True) for img in images if not isinstance(img, list)]
+            conf_preds, loc_data = net(images)
+            conf_scores = softmax(conf_preds).clone()
 
-                for ik in range(boxes.shape[0]):
-                    boxes[ik, 0] = max(0, boxes[ik, 0])
-                    boxes[ik, 2] = min(width, boxes[ik, 2])
-                    boxes[ik, 1] = max(0, boxes[ik, 1])
-                    boxes[ik, 3] = min(height, boxes[ik, 3])
-                cls_dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=True)
-                det_boxes[cl_ind-1].append(cls_dets)
-            count += 1
+            if print_time and val_itr%val_step == 0:
+                torch.cuda.synchronize()
+                tf = time.perf_counter()
+                print('Forward Time {:0.3f}'.format(tf-t1))
+            
+            for b in range(batch_size):
+                # pdb.set_trace()
+                inds = np.asarray([m*args.seq_len for m in range(num_mt[b])])
+                # pdb.set_trace()
+                gt = ground_truths[b].numpy()
+                gt = gt[inds]
+                gt[:,0] *= width
+                gt[:,2] *= width
+                gt[:,1] *= height
+                gt[:,3] *= height
+                gt_boxes.append(gt)
+                decoded_boxes = decode_seq(loc_data[b].data, priors, args.cfg['variance'], args.seq_len)
+                decoded_boxes = decoded_boxes[:,:4].clone()
 
-        if val_itr%val_step == 0:
-            torch.cuda.synchronize()
-            te = time.perf_counter()
-            print('im_detect: {:d}/{:d} time taken {:0.3f}'.format(count, num_images, te-ts))
-            torch.cuda.synchronize()
-            ts = time.perf_counter()
-        if print_time and val_itr%val_step == 0:
-            torch.cuda.synchronize()
-            te = time.perf_counter()
-            print('NMS stuff Time {:0.3f}'.format(te - tf))
+                #Apply nms per class and obtain the results
+                for cl_ind in range(1, num_classes):
+                    scores = conf_scores[b, :, cl_ind].squeeze()
+                    c_mask = scores.gt(args.conf_thresh)  # greater than minmum threshold
+                    scores = scores[c_mask].squeeze()
+                    # print('scores size',scores.size())
+                    if scores.dim() == 0:
+                        # print(len(''), ' dim ==0 ')
+                        det_boxes[cl_ind - 1].append(np.asarray([]))
+                        continue
+                    boxes = decoded_boxes.clone()
+                    l_mask = c_mask.unsqueeze(1).expand_as(boxes)
+                    boxes = boxes[l_mask].view(-1, 4)
+                    # idx of highest scoring and non-overlapping boxes per class
+                    ids, counts = nms(boxes, scores, args.nms_thresh, args.topk)  # idsn - ids after nms
+                    scores = scores[ids[:counts]].cpu().numpy()
+                    boxes = boxes[ids[:counts]].cpu().numpy()
+                    # print('boxes sahpe',boxes.shape)
+                    boxes[:,0] *= width
+                    boxes[:,2] *= width
+                    boxes[:,1] *= height
+                    boxes[:,3] *= height
+
+                    for ik in range(boxes.shape[0]):
+                        boxes[ik, 0] = max(0, boxes[ik, 0])
+                        boxes[ik, 2] = min(width, boxes[ik, 2])
+                        boxes[ik, 1] = max(0, boxes[ik, 1])
+                        boxes[ik, 3] = min(height, boxes[ik, 3])
+                    cls_dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=True)
+                    det_boxes[cl_ind-1].append(cls_dets)
+                count += 1
+
+            if val_itr%val_step == 0:
+                torch.cuda.synchronize()
+                te = time.perf_counter()
+                print('im_detect: {:d}/{:d} time taken {:0.3f}'.format(count, num_images, te-ts))
+                torch.cuda.synchronize()
+                ts = time.perf_counter()
+            if print_time and val_itr%val_step == 0:
+                torch.cuda.synchronize()
+                te = time.perf_counter()
+                print('NMS stuff Time {:0.3f}'.format(te - tf))
     print('Evaluating detections for itration number ', iteration_num)
     return evaluate_detections(gt_boxes, det_boxes, CLASSES[args.dataset], iou_thresh=iou_thresh)
 

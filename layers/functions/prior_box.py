@@ -68,7 +68,7 @@ class PriorBox(object):
         else:
             raise 'wrong version'
 
-        output = torch.cuda.FloatTensor(mean).view(-1, 4*self.seq_len)
+        output = torch.FloatTensor(mean).view(-1, 4*self.seq_len)
         if self.clip:
             output.clamp_(max=1, min=0)
         return output

@@ -16,15 +16,18 @@ class FeatPooling(nn.Module):
         self.fusion_type = fusion_type
         self.seq_len = seq_len
         amd = afnMat.shape  # am dim. eg. 1444 x 1444 for fm 38 x 38
-        ffm_index = torch.LongTensor(seq_len,amd[0]*amd[0])
-        amc = 0 # affinity matrix element count
-        for c1 in range(amd[0]):
-            for c2 in range(amd[1]):
-                if self.afnMat[c1, c2] >= self.amt:
-                    for s in range(seq_len):
-                        ffm_index[s,amc] = c1
-                    amc += 1
-        ffm_index = ffm_index[:,:amc]
+        with torch.no_grad():
+            ffm_index = torch.LongTensor(seq_len,amd[0]*amd[0])
+            amc = 0 # affinity matrix element count
+            for c1 in range(amd[0]):
+                for c2 in range(amd[1]):
+                    if self.afnMat[c1, c2] >= self.amt:
+                        for s in range(seq_len):
+                            ffm_index[s,amc] = c1
+                        amc += 1
+            ffm_index = ffm_index[:,:amc]
+            ffm_index = ffm_index.cuda()
+        ffm_index.requires_grad = False   
         #print('print(self.ffm_index_c1', ffm_index_c1.size(), afnMat.shape)
         self.register_buffer("ffm_index", ffm_index)  # , requires_grad=False)
 
@@ -60,7 +63,7 @@ class FeatPooling(nn.Module):
 
         final_fm = None
         if self.fusion_type == 'cat':
-            final_fm = torch.cat((pfm1.index_select(1, Variable(self.ffm_index[0])), pfm2.index_select(1, Variable(self.ffm_index[1]))), 2)
+            final_fm = torch.cat((pfm1.index_select(1, self.ffm_index[0]), pfm2.index_select(1, self.ffm_index[1])), 2)
             for s in range(2, self.seq_len):
                     pfm2 = pfm[s]
                     final_fm = torch.cat((final_fm,pfm2.index_select(1, Variable(self.ffm_index[s]))), 2)

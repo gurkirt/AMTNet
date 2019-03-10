@@ -25,15 +25,14 @@ def vgg(cfg, i, batch_norm=False):
         else:
             conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
             if batch_norm:
-                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
+                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU()]
             else:
-                layers += [conv2d, nn.ReLU(inplace=True)]
+                layers += [conv2d, nn.ReLU()]
             in_channels = v
     pool5 = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
     conv6 = nn.Conv2d(512, 1024, kernel_size=3, padding=6, dilation=6)
     conv7 = nn.Conv2d(1024, 1024, kernel_size=1)
-    layers += [pool5, conv6,
-               nn.ReLU(inplace=True), conv7, nn.ReLU(inplace=True)]
+    layers += [pool5, conv6, nn.ReLU(), conv7, nn.ReLU()]
     return layers
 
 
@@ -94,15 +93,18 @@ class SSD_CORE(nn.Module):
         def forward(self, x):
 
             x = x.view(-1, x.size(2), x.size(3), x.size(4))
-            sources = self.baseforward(x)
-
+            _sources = self.baseforward(x)
+            sources = [0,1,2,3,4,5]
+            for i, s in enumerate(_sources):
+                sources[i] = s/self.scale
             pooled_source = []
-            pooled_source.append(self.featPool0(sources[0] / self.scale))
-            pooled_source.append(self.featPool1(sources[1] / self.scale))
-            pooled_source.append(self.featPool2(sources[2] / self.scale))
-            pooled_source.append(self.featPool3(sources[3] / self.scale))
-            pooled_source.append(self.featPool4(sources[4] / self.scale))
-            pooled_source.append(self.featPool5(sources[5] / self.scale))
+            # print(sources[0].size())
+            pooled_source.append(self.featPool0(sources[0]))
+            pooled_source.append(self.featPool1(sources[1]))
+            pooled_source.append(self.featPool2(sources[2]))
+            pooled_source.append(self.featPool3(sources[3]))
+            pooled_source.append(self.featPool4(sources[4]))
+            pooled_source.append(self.featPool5(sources[5]))
             #print('pooled_source size', pooled_source[0].size())
 
             return pooled_source
@@ -125,7 +127,7 @@ class SSD_CORE(nn.Module):
 
             # apply extra layers and cache source layer outputs
             for k, v in enumerate(self.extras):
-                x = F.relu(v(x), inplace=True)
+                x = F.relu(v(x))
                 if k % 2 == 1:
                     sources.append(x)
 
@@ -140,7 +142,7 @@ class SSD_CORE(nn.Module):
 
             for name, param in state_dict.items():
                 # pdb.set_trace()
-                name = name[16:]
+                # name = name[16:]
                 if name in own_state.keys():
                     # print(name)
                     if isinstance(param, Parameter):
@@ -162,11 +164,11 @@ mbox = {
     '512': [],
 }
 
-def multibox(cfg, num_classes, fusion_muliplier, seq_len=2, kd=3):
+def multibox(cfg, num_classes, fusion_num_muliplier, seq_len=2, kd=3):
     loc_layers = []
     conf_layers = []
     fmd = [512, 1024, 512, 256, 256, 256]  # feature map depth/channel size
-    fmd_mul = fusion_muliplier
+    fmd_mul = fusion_num_muliplier
     for i in range(len(fmd)):
         inpd = fmd[i]*seq_len*kd*kd*fmd_mul
         print('Feature map size', inpd)
@@ -181,21 +183,18 @@ def multibox(cfg, num_classes, fusion_muliplier, seq_len=2, kd=3):
 
     return loc_layers, conf_layers
 
-class SSD(nn.Module):
+class AMTNet(nn.Module):
     def __init__(self, args):
         #num_classes, seq_len=2, fusion_type='cat', kd=3):
-        super(SSD, self).__init__()
-        self.fusion
+        super(AMTNet, self).__init__()
+        self.fusion = args.fusion
         self.core_base = SSD_CORE(args.input_frames_base, args.ssd_dim, args.seq_len, kd=args.kd)
-        if args.fusion:
+        if self.fusion:
             self.core_extra = SSD_CORE(args.input_frames_extra, args.ssd_dim, args.seq_len, kd=args.kd)
         self.fusion_type = args.fusion_type
         self.num_classes = args.num_classes
         self.seq_len = args.seq_len
-        self.priorbox = PriorBox(v2, args.seq_len)
-        self.priors = Variable(self.priorbox.forward(), volatile=True)
-        self.num_priors = self.priors.size(0)
-        head = multibox(mbox[str(args.ssd_dim)], args.num_classes, args.fusion_muliplier, args.seq_len, args.kd)
+        head = multibox(mbox[str(args.ssd_dim)], args.num_classes, args.fusion_num_muliplier, args.seq_len, args.kd)
         self.loc = nn.ModuleList(head[0])
         self.conf = nn.ModuleList(head[1])
 
@@ -219,22 +218,26 @@ class SSD(nn.Module):
                     x = (x1 + x2) / 2.0
                 else:
                     raise Exception('Supply correct fusion type')
-
-                loc.append(l(x))
-                conf.append(c(x))  # .contiguous())
+                locs = l(x)
+                locs.view(locs.size(0), -1)
+                loc.append(locs)
+                
+                confs = c(x)
+                confs  = confs.view(confs.size(0), -1)
+                conf.append(confs)  # .contiguous())
         else:
             # apply multibox head to source layers
             for (x, l, c) in zip(pooled_base, self.loc, self.conf):
-                loc.append(l(x))
-                conf.append(c(x))  # .contiguous())
+                locs = l(x)
+                locs = locs.view(locs.size(0), -1)
+                loc.append(locs)
+                
+                confs = c(x)
+                confs  = confs.view(confs.size(0), -1)
+                conf.append(confs) # .contiguous())
+        # pdb.set_trace()
+        loc = torch.cat(loc, 1)
+        conf = torch.cat(conf, 1)
 
-        loc = torch.cat([o.view(o.size(0), -1) for o in loc], 1)
-        conf = torch.cat([o.view(o.size(0), -1) for o in conf], 1)
-
-        output = (
-            loc.view(loc.size(0), -1, 4*self.seq_len),
-            conf.view(conf.size(0), -1, self.num_classes),
-            self.priors
-        )
-
-        return output
+        
+        return conf.view(conf.size(0), -1, self.num_classes), loc.view(loc.size(0), -1, 4*self.seq_len),

@@ -1,6 +1,89 @@
-import torch, pdb
+import torch, pdb, math
 import numpy as np
 
+class MatchPrior(object):
+    def __init__(self, priors, variances, seq_len=2, iou_threshold=0.5):
+        self.priors = priors
+        self.priors_point_form = priors.clone()
+        # pdb.set_trace()
+        for s in range(seq_len):
+            self.priors_point_form[:,s*4:(s+1)*4] = point_form(priors[:,s*4:(s+1)*4])
+        self.variances = variances
+        self.seq_len = seq_len
+        self.iou_threshold = iou_threshold
+
+
+    def __call__(self, gt_boxes, gt_labels, num_mt):
+            # pdb.set_trace()
+            if type(gt_boxes) is np.ndarray:
+                gt_boxes = torch.from_numpy(gt_boxes)
+            if type(gt_labels) is np.ndarray:
+                gt_labels = torch.from_numpy(gt_labels)
+
+            seq_overlaps =[]
+            inds = torch.LongTensor([m*self.seq_len for m in range(num_mt)])  ## get indexes of first frame in seq for each microtube
+            gt_labels = gt_labels[inds]
+            for s in range(self.seq_len):
+                seq_overlaps.append(jaccard(gt_boxes[inds+s, :], self.priors_point_form[:, s*4:(s+1)*4]))
+
+            overlaps = seq_overlaps[0]
+            ## Compute average overlap
+            for s in range(self.seq_len-1):
+                overlaps += seq_overlaps[s+1]
+            overlaps /= float(self.seq_len)
+            # (Bipartite Matching)
+            # [1,num_objects] best prior for each ground truth
+            best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
+            # [1,num_priors] best ground truth for each prior
+            best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
+            best_truth_idx.squeeze_(0)
+            best_truth_overlap.squeeze_(0)
+            best_prior_idx.squeeze_(1)
+            best_prior_overlap.squeeze_(1)
+            best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
+            # TODO refactor: index  best_prior_idx with long tensor
+            # ensure every gt matches with its prior of max overlap
+            for j in range(best_prior_idx.size(0)):
+                best_truth_idx[best_prior_idx[j]] = j
+
+            conf = gt_labels[best_truth_idx] + 1         # Shape: [num_priors]
+            conf[best_truth_overlap < self.iou_threshold] = 0  # label as background
+
+            for s in range(self.seq_len):
+                st = gt_boxes[inds + s, :]
+                matches = st[best_truth_idx]  # Shape: [num_priors,4]
+                if s == 0:
+                    loc = encode(matches, self.priors[:, s * 4:(s + 1) * 4],
+                                self.variances)  # Shape: [num_priors, 4] -- encode the gt boxes for frame i
+                else:
+                    temp = encode(matches, self.priors[:, s * 4:(s + 1) * 4], self.variances)
+                    loc = torch.cat([loc, temp], 1)  # shape: [num_priors x 4 * seql_len] : stacking the location targets for different frames
+
+            return conf, loc
+
+def hard_negative_mining(loss, labels, neg_pos_ratio):
+    """
+    It used to suppress the presence of a large number of negative prediction.
+    It works on image level not batch level.
+    For any example/image, it keeps all the positive predictions and
+     cut the number of negative predictions to make sure the ratio
+     between the negative examples and positive examples is no more
+     the given ratio for an image.
+    Args:
+        loss (N, num_priors): the loss for each example.
+        labels (N, num_priors): the labels.
+        neg_pos_ratio:  the ratio between the negative examples and positive examples.
+    """
+    pos_mask = labels > 0
+    num_pos = pos_mask.long().sum(dim=1, keepdim=True)
+    num_neg = num_pos * neg_pos_ratio
+
+    loss[pos_mask] = -math.inf
+    _, indexes = loss.sort(dim=1, descending=True)
+    _, orders = indexes.sort(dim=1)
+    neg_mask = orders < num_neg
+    return pos_mask | neg_mask
+    
 def point_form(boxes):
     """ Convert prior_boxes to (xmin, ymin, xmax, ymax)
     representation for comparison to point form ground truth data.
@@ -67,8 +150,6 @@ def jaccard(box_a, box_b):
     return inter / union  # [A,B]
 
 
-
-
 def get_ovlp_cellwise(overlaps):
     feature_maps = [38, 19, 10, 5, 3, 1]
     aratios = [4, 6, 6, 6, 4, 4]
@@ -90,114 +171,6 @@ def get_ovlp_cellwise(overlaps):
     assert count == dim
 
     return out_ovlp
-
-
-def match_for_tm(truths, priors, threshold=0.2):
-
-    # pdb.set_trace()
-    #print(truths.size(), priors.size())
-    seq_overlaps1 =[]
-    overlaps1 = jaccard(truths[0, :].unsqueeze(0), point_form(priors))
-    overlaps2 = jaccard(truths[1, :].unsqueeze(0), point_form(priors))
-    overlaps1 = get_ovlp_cellwise(overlaps1)
-    overlaps2 = get_ovlp_cellwise(overlaps2)
-    indexs1 = (overlaps1 >= threshold).nonzero()
-    indexs2 = (overlaps2 >= threshold).nonzero()
-    overlaps1 = overlaps1[indexs1]
-    overlaps2 = overlaps2[indexs2]
-    return  indexs1,overlaps1,indexs2,overlaps2
-
-def avg_multi_match(threshold, truths, priors, labels, variances, loc_t, conf_t, idx, num_mt, seq_len):
-
-    # pdb.set_trace()
-    seq_overlaps =[]
-    inds = torch.cuda.LongTensor([m*seq_len for m in range(num_mt)])  ## get indexes of first frame in seq for each microtube
-    labels = labels[inds]
-    for s in range(seq_len):
-        seq_overlaps.append(jaccard(truths[inds+s, :], point_form(priors[:, s*4:(s+1)*4])))
-
-    overlaps = seq_overlaps[0]
-    ## Compute average overlap
-    for s in range(seq_len-1):
-        overlaps += seq_overlaps[s+1]
-    overlaps /= float(seq_len)
-    # (Bipartite Matching)
-    # [1,num_objects] best prior for each ground truth
-    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
-    # [1,num_priors] best ground truth for each prior
-    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
-    best_truth_idx.squeeze_(0)
-    best_truth_overlap.squeeze_(0)
-    best_prior_idx.squeeze_(1)
-    best_prior_overlap.squeeze_(1)
-    best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
-    # TODO refactor: index  best_prior_idx with long tensor
-    # ensure every gt matches with its prior of max overlap
-    for j in range(best_prior_idx.size(0)):
-        best_truth_idx[best_prior_idx[j]] = j
-
-    conf = labels[best_truth_idx] + 1         # Shape: [num_priors]
-    conf[best_truth_overlap < threshold] = 0  # label as background
-
-    for s in range(seq_len):
-        st = truths[inds + s, :]
-        matches = st[best_truth_idx]  # Shape: [num_priors,4]
-        if s == 0:
-            loc = encode(matches, priors[:, s * 4:(s + 1) * 4],
-                         variances)  # Shape: [num_priors, 4] -- encode the gt boxes for frame i
-        else:
-            temp = encode(matches, priors[:, s * 4:(s + 1) * 4], variances)
-            loc = torch.cat([loc, temp], 1)  # shape: [num_priors x 4 * seql_len] : stacking the location targets for different frames
-
-    loc_t[idx] = loc    # [num_priors,4] encoded offsets to learn
-    conf_t[idx] = conf  # [num_priors] top class label for each prior
-
-
-def independent_multi_match(threshold, truths, priors, labels, variances, loc_t, conf_t, idx, num_mt, seq_len):
-
-    # pdb.set_trace()
-    seq_overlaps =[]
-    inds = torch.cuda.LongTensor([m*seq_len for m in range(num_mt)])  ## get indexes of first frame in seq for each microtube
-    labels = labels[inds]
-    for s in range(seq_len):
-        seq_overlaps.append(jaccard(truths[inds+s, :], point_form(priors[:, s*4:(s+1)*4])))
-
-    overlaps = seq_overlaps[0]
-    ## Compute average overlap
-    for s in range(seq_len-1):
-        overlaps += seq_overlaps[s+1]
-    overlaps /= float(seq_len)
-    # (Bipartite Matching)
-    # [1,num_objects] best prior for each ground truth
-    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
-    # [1,num_priors] best ground truth for each prior
-    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
-    best_truth_idx.squeeze_(0)
-    best_truth_overlap.squeeze_(0)
-    best_prior_idx.squeeze_(1)
-    best_prior_overlap.squeeze_(1)
-    best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
-    # TODO refactor: index  best_prior_idx with long tensor
-    # ensure every gt matches with its prior of max overlap
-    best_truth_idx_copy = best_truth_idx.clone()
-    for j in range(best_prior_idx.size(0)):
-        best_truth_idx[best_prior_idx[j]] = j
-
-    conf = labels[best_truth_idx] + 1         # Shape: [num_priors]
-    conf[best_truth_overlap < threshold] = 0  # label as background
-
-    for s in range(seq_len):
-        st = truths[inds + s, :]
-        matches = st[best_truth_idx]  # Shape: [num_priors,4]
-        if s == 0:
-            loc = encode(matches, priors[:, s * 4:(s + 1) * 4],
-                         variances)  # Shape: [num_priors, 4] -- encode the gt boxes for frame i
-        else:
-            temp = encode(matches, priors[:, s * 4:(s + 1) * 4], variances)
-            loc = torch.cat([loc, temp], 1)  # shape: [num_priors x 4 * seql_len] : stacking the location targets for different frames
-
-    loc_t[idx] = loc    # [num_priors,4] encoded offsets to learn
-    conf_t[idx] = conf  # [num_priors] top class label for each prior
 
 
 def encode(matched, priors, variances):

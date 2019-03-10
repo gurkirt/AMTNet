@@ -25,7 +25,9 @@ CLASSES['jhmdb21'] = ['brush_hair','catch','clap','climb_stairs','golf','jump','
                       'pick','pour','pullup','push','run','shoot_ball','shoot_bow',
                       'shoot_gun','sit','stand','swing_baseball','throw','walk','wave']
 
-class AnnotationTransform(object):
+
+
+class NormliseBoxes(object):
 
     def __init__(self, class_to_ind=None, keep_difficult=False):
         self.keep_difficult = keep_difficult
@@ -177,6 +179,9 @@ def make_lists_ucf(rootpath, imgtype, seq_len=2, seq_gap=0, split=1, fulltest=Fa
 
     for seq_gap in seq_gaps:
         for vid, videoname in enumerate(sorted(database.keys())):
+            # if vid>200:
+            #     continue
+
             video_list.append(videoname)
             actidx = database[videoname]['label']
 
