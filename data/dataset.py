@@ -170,7 +170,7 @@ class ActionDetection(data.Dataset):
             aug_imgs, aug_bxs, labels = self.transform(imgs, boxes_norm[:, :4], boxes_norm[:, 4], self.seq_len,
                                                            num_mt)  # calling SSDAugmentation
         else:
-            aug_imgs, aug_bxs, labels = self.transform(imgs, boxes_norm[:, :4], boxes_norm[:, -1])  # calling BaseTransform
+            aug_imgs, aug_bxs, labels = self.transform(imgs, boxes_norm[:, :4], boxes_norm[:, 4])  # calling BaseTransform
         
         labels = labels.astype(np.int64)
         num_bxs = aug_bxs.shape[0]
@@ -178,7 +178,8 @@ class ActionDetection(data.Dataset):
         # so don't confuse with num_mta and num_mt they are different
         num_mtaa = int(num_bxs / self.seq_len)  # num_mtaa - num micro tube after augmentation
 
-
+        assert num_mtaa >0
+        
         # aug_imgs is in [seq_len x H x W x C] (0,1,2,3) ---> so converting from RGB (0,1,2) to BGR along 4-th dim
         aug_imgs = aug_imgs[:, :, :, (2, 1, 0)]
         # print('NUm of frame loaded and and required ', aug_imgs.shape[0], ' ', num_input_frames)

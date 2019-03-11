@@ -87,7 +87,11 @@ elif hostname == 'mercury':
     args.data_root = '/mnt/mercury-fast/datasets/'
     args.save_root = '/mnt/mercury-beta/'
     args.vis_port = 8098
-
+else:
+    args.data_root = '/home/gurkirt/datasets/'
+    args.save_root = '/home/gurkirt/cache/'
+    # args.vis_port = 8098
+    visdom=False
 # python train.py --seq_len=2 --num_workers=4 --batch_size=16 --ngpu=2 --fusion_type=NONE --input_type_base=brox --input_frames_base=5 --stepvalues=30000,50000 --max_iter=60000 --eval_step=10000 --lr=0.001 
 
 torch.set_default_tensor_type('torch.FloatTensor')
@@ -199,18 +203,17 @@ def main():
     criterion = MultiboxLoss()
 
     scheduler = MultiStepLR(optimizer, milestones=args.stepvalues, gamma=args.gamma)
+    # Get proior or anchor boxes
     with torch.no_grad():
         priorbox = PriorBox(v2, args.seq_len)
         priors = priorbox.forward()
-    priors.requires_grad = False
-    # with torch.autograd.set_detect_anomaly(True):
     train(args, net, priors, optimizer, criterion, scheduler)
 
 
 def train(args, net, priors, optimizer, criterion, scheduler):
     log_file = open(args.save_root+"training.log", "w", 1)
     log_file.write(args.exp_name+'\n')
-    for arg in vars(args):
+    for arg in sorted(vars(args)):
         print(arg, getattr(args, arg))
         log_file.write(str(arg)+': '+str(getattr(args, arg))+'\n')
 

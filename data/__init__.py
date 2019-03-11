@@ -1,7 +1,7 @@
 #from .voc0712 import VOCDetection, AnnotationTransform, detection_collate, VOC_CLASSES
 from .dataset import ActionDetection, detection_collate
 from .shared import NormliseBoxes, CLASSES
-from .config import *
+from .anchor_configs import *
 import cv2
 import numpy as np
 
