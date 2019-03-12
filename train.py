@@ -52,7 +52,7 @@ parser.add_argument('--num_workers', default=4, type=int, help='Number of worker
 parser.add_argument('--max_iter', default=300000, type=int, help='Number of training iterations')
 parser.add_argument('--val_step', default=10000, type=int, help='Number of training iterations')
 parser.add_argument('--cuda', default=1, type=str2bool, help='Use cuda to train model')
-parser.add_argument('--ngpu', default=2, type=int, help='Use cuda to train model')
+parser.add_argument('--ngpu', default=1, type=int, help='Use cuda to train model')
 parser.add_argument('--lr', '--learning-rate', default=0.0005, type=float, help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
 parser.add_argument('--stepvalues', default='10000,30000', type=str, help='step points for learning rate drop')
@@ -153,7 +153,10 @@ def main():
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
         net.core_extra.load_my_state_dict(extra_weights, input_frames=args.input_frames_extra)
     else:
-        base_weights = torch.load(args.data_root +'/weights/vgg_ucf24_{}_s{}.pth'.format(args.input_type_base, args.train_split))
+        if args.input_type_base != 'rgb':
+            vbase_weights = torch.load(args.data_root +'/weights/vgg_ucf24_{}_s{}.pth'.format('brox', args.train_split))
+        else:
+            base_weights = torch.load(args.data_root +'/weights/vgg_ucf24_{}_s{}.pth'.format(args.input_type_base, args.train_split))
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
     
     args.data_root += args.dataset + '/'

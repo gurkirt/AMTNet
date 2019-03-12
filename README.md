@@ -23,20 +23,22 @@ Now we use linear classification and regression heads instead of convolutional h
 - <a href='#references'>Reference</a>
 
 ## Installation
-- Install [PyTorch](http://pytorch.org/)(version v1.0) by selecting your environment on the website and running the appropriate command.
-- Please install cv2 as well. I recommend using anaconda 3.6 and its opnecv package.
+- Install [PyTorch](http://pytorch.org/)(version v1.0 as of on March 2019) by selecting your environment on the website and running the appropriate command.
+- Please install cv2 and visdom form conda-forge. 
+- I recommend using anaconda 3.7. 
 - You will also need Matlab. If you have distributed computing license then it would be faster otherwise it should also be fine. 
 Just replace `parfor` with simple `for` in Matlab scripts. I would be happy to accept a PR for python version of this part.
 - Clone this repository. 
-  * Note: We currently only support Python 3+ with Pytorch version v1.0 on Linux system.
-- We currently only support [UCF24](http://www.thumos.info/download.html) with [revised annotaions](https://github.com/gurkirt/corrected-UCF101-Annots) released with our [real-time online action detection paper](https://arxiv.org/pdf/1611.08563.pdf). Unlike [ROAD]() implementation, we support [JHMDB21](http://jhmdb.is.tue.mpg.de/) as well.
-- To simulate the same training and evaluation setup we provide extracted `rgb` images from videos along with optical flow images (both `brox flow` and `real-time flow`) computed for the UCF24 and JHMDB21 datasets.
+  * Note: We currently only support Python 3.7 with Pytorch version v1.0 on Linux system.
+- We currently support [UCF24](http://www.thumos.info/download.html) with [revised annotaions](https://github.com/gurkirt/corrected-UCF101-Annots) released with our [real-time online action detection paper](https://arxiv.org/pdf/1611.08563.pdf). Unlike [ROAD](https://github.com/gurkirt/realtime-action-detection) implementation, we support [JHMDB21](http://jhmdb.is.tue.mpg.de/) as well.
+- Similar to [ROAD](https://github.com/gurkirt/realtime-action-detection) setup, to simulate the same training and evaluation setup we provide extracted `rgb` images from videos along with optical flow images (both `brox flow` and `real-time flow`) computed for the UCF24 and JHMDB21 datasets.
 You can download it from my [google drive link](https://drive.google.com/drive/folders/1o0JNYZl2Wv9bi66wF_SQ4N5cxdCyHTJR?usp=sharing))
-- We also support [Visdom](https://github.com/facebookresearch/visdom) for visualization of loss and frame-meanAP on subset during training.
+- Install opencv package for anaconda using ``conda install opencv``
+- We also support [Visdom](https://github.com/facebookresearch/visdom) for visualization of loss and frame-meanAP on validation subset during training.
   * To use Visdom in the browser: 
   ```Shell
   # First install Python server and client 
-  pip install visdom
+  conda install -c conda-forge visdom
   # Start the server (probably in a screen or tmux)
   python -m visdom.server --port=8097
   ```
@@ -47,41 +49,47 @@ To make things easy, we provide extracted `rgb` images from videos along with op
 you can download it from my [google drive link](https://drive.google.com/drive/folders/1o0JNYZl2Wv9bi66wF_SQ4N5cxdCyHTJR?usp=sharing).
 Please download it and extract it wherever you going to store your experiments. 
 
-ActionDetection is a dataset loader Class in `data/datasetDetection.py` that inherits `torch.utils.data.Dataset` making it fully compatible with the `torchvision.datasets` [API](http://pytorch.org/docs/torchvision/datasets.html).
+ActionDetection is a dataset loader Class in `data/dataset.py` that inherits `torch.utils.data.Dataset` making it fully compatible with the `torchvision.datasets` [API](http://pytorch.org/docs/torchvision/datasets.html).
 
+## Training AMTNet
+- Similar to ROAD, we requires VGG-16 weights pretrained on UCF24. These weights are similiar to those produced by SSD used in ROAD. This to reduce training time. 
+- Training of a single stream AMTnet can be achived on single 1080Ti GPU. It takes around 8GB memory. Given pretrained weight initilisation.  
+- By default, we assume that you have downloaded the datasets and weights.    
+- To train AMTNet using the training script simply specify the parameters listed in `train.py` as a flag or manually change them in script.
 
-## Training SSD
-- Similar to ROAD, we requires fc-reduced [VGG-16](https://arxiv.org/abs/1409.1556) model weights, 
-weights will be uploaded soon.
-- By default, we assume that you have downloaded the datasets.    
-- To train SSD using the training script simply specify the parameters listed in `train.py` as a flag or manually change them.
+Let's assume that you extracted dataset in `/home/user/ucf24/` directory then your train command from the root directory of this repo is going to be: 
 
-# More details and reproduced results to follow soon
-
-<!-- Let's assume that you extracted dataset in `/home/user/ucf24/` directory then your train command from the root directory of this repo is going to be: 
+### RGB frames as input 
 
 ```Shell
-CUDA_VISIBLE_DEVICES=0 python3 train-ucf24.py --data_root=/home/user/ucf24/ --save_root=/home/user/ucf24/ 
---visdom=True --input_type=rgb --stepvalues=30000,60000,90000 --max_iter=120000
+python train.py --seq_len=2 --num_workers=4 --batch_size=8 --ngpu=2 --fusion_type=NONE --input_type_base=rgb --input_frames_base=1 --lr=0.0005 --max_iter=70000 --stepvalues=50000 --val_step=10000
 ```
 
-To train of flow inputs
+### Brox-flow as input
 ```Shell
-CUDA_VISIBLE_DEVICES=0 python3 train-ucf24.py --data_root=/home/user/ucf24/ --save_root=/home/user/ucf24/ 
---visdom=True --input_type=brox --stepvalues=70000,90000 --max_iter=120000
+python train.py --seq_len=2 --num_workers=4 --batch_size=8 --ngpu=2 --fusion_type=NONE --input_type_base=brox --input_frames_base=5 --lr=0.0005 --max_iter=70000 --stepvalues=50000 --val_step=10000
 ```
+### Fusion
+```Shell
+python train.py --seq_len=2 --num_workers=4 --batch_size=8 --ngpu=2 --fusion_type=SUM --input_type_base=rgb --input_type_extra=brox --input_frames_base=1 --input_frames_extra=5 --lr=0.0005 --max_iter=70000 --stepvalues=50000 --val_step=10000
+```
+### Fusion notes
+* Here, we need 2 GPUs or 16GB VRAM, or reduce the batch size to 6 or 4 and learning rate to 0.0001. Not gurrented to reproduce same results but it will be close enough.
+* You can use ``CAT`` for concatnation fusion.
 
 Different parameters in `train-ucf24.py` will result in different performance
 
-- Note:
-  * Network occupies almost 9.2GB VRAM on a GPU, we used 1080Ti for training and normal training takes about 32-40 hrs 
+- Other notes:
+  * Single -stream network occupies almost 8GB VRAM on a GPU, we used 1080Ti for training and normal training takes about 20 hrs, you can use 1080 as well 
   * For instructions on Visdom usage/installation, see the <a href='#installation'>Installation</a> section. By default, it is off.
   * If you don't like to use visdom then you always keep track of train using logfile which is saved under save_root directory
-  * During training checkpoint is saved every 10K iteration also log it's frame-level `frame-mean-ap` on a subset of 22k test images.
-  * We recommend training for 120K iterations for all the input types.
+  * During training checkpoint is saved every 10K iteration also log it's frame-level `frame-mean-ap` on a subset of 15k test images.
+  * We recommend training for 60K iterations for all the input types.
 
-## Building Tubes
-To generate the tubes and evaluate them, first, you will need frame-level detection then you can navigate to 'online-tubes' to generate tubes using `I01onlineTubes` and `I02genFusedTubes`.
+# More instructions to Follow
+
+<!-- ## Building Tubes
+To generate the tubes and evaluate them, first, you will need frame-level detection then you can navigate to 'online-tubes' to generate tubes using `I01onlineTubes` and `I02genFusedTubes`. 
 
 ##### produce frame-level detection
 Once you have trained network then you can use `test-ucf24.py` to generate frame-level detections.
