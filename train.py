@@ -162,7 +162,7 @@ def main():
     net = net.cuda()
 
     def xavier(param):
-        init.xavier_uniform(param)
+        init.xavier_uniform_(param)
 
     def weights_init(m):
         if isinstance(m, nn.Conv2d):
@@ -357,7 +357,8 @@ def train(args, net, priors, optimizer, criterion, scheduler):
                        repr(iteration) + '.pth')
 
             net.eval() # switch net to evaluation mode
-            mAP, ap_all, ap_strs = validate(args, net, priors, val_data_loader, val_dataset, iteration, iou_thresh=args.iou_thresh)
+            with torch.no_grad():
+                mAP, ap_all, ap_strs = validate(args, net, priors, val_data_loader, val_dataset, iteration, iou_thresh=args.iou_thresh)
 
             for ap_str in ap_strs:
                 print(ap_str)
@@ -440,10 +441,10 @@ def validate(args, net, priors, val_data_loader, val_dataset, iteration_num, iou
                 gt_boxes.append(gt)
                 decoded_boxes = decode_seq(loc_data[b], priors, args.cfg['variance'], args.seq_len)
                 decoded_boxes = decoded_boxes[:,:4].clone()
-                conf_scores = conf_scores_all[b].cpu().clone()
+                conf_scores = conf_scores_all[b].clone()
                 #Apply nms per class and obtain the results
                 for cl_ind in range(1, num_classes):
-                    pdb.set_trace()
+                    # pdb.set_trace()
                     scores = conf_scores[:, cl_ind].squeeze()
                     c_mask = scores.gt(args.conf_thresh)  # greater than minmum threshold
                     scores = scores[c_mask].squeeze() # reduce the dimension so if no element then # of dim is 0
