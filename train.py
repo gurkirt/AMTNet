@@ -6,7 +6,6 @@ Licensed under The MIT License [see LICENSE for details]
 
 """
 
-
 import os
 import torch
 import torch.nn as nn
@@ -51,7 +50,7 @@ parser.add_argument('--jaccard_threshold', default=0.5, type=float, help='Min Ja
 parser.add_argument('--batch_size', default=4, type=int, help='Batch size for training')
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers used in dataloading')
 parser.add_argument('--max_iter', default=300000, type=int, help='Number of training iterations')
-parser.add_argument('--eval_step', default=30000, type=int, help='Number of training iterations')
+parser.add_argument('--val_step', default=10000, type=int, help='Number of training iterations')
 parser.add_argument('--cuda', default=1, type=str2bool, help='Use cuda to train model')
 parser.add_argument('--ngpu', default=2, type=int, help='Use cuda to train model')
 parser.add_argument('--lr', '--learning-rate', default=0.0005, type=float, help='initial learning rate')
@@ -92,7 +91,7 @@ else:
     args.save_root = '/home/gurkirt/cache/'
     # args.vis_port = 8098
     visdom=False
-# python train.py --seq_len=2 --num_workers=4 --batch_size=16 --ngpu=2 --fusion_type=NONE --input_type_base=brox --input_frames_base=5 --stepvalues=30000,50000 --max_iter=60000 --eval_step=10000 --lr=0.001 
+# python train.py --seq_len=2 --num_workers=4 --batch_size=16 --ngpu=2 --fusion_type=NONE --input_type_base=brox --input_frames_base=5 --stepvalues=30000,50000 --max_iter=60000 --val_step=10000 --lr=0.001 
 
 torch.set_default_tensor_type('torch.FloatTensor')
 np.random.seed(args.man_seed)
@@ -117,7 +116,7 @@ def main():
     args.num_classes = num_classes
     args.stepvalues = [int(val) for val in args.stepvalues.split(',')]
     args.loss_reset_step = 30
-    # args.eval_step = 30000
+    # args.val_step = 30000
     args.print_step = 10
     args.fusion_type = args.fusion_type.upper()
     args.fusion = args.fusion_type in ['SUM','CAT','MEAN']
@@ -134,8 +133,8 @@ def main():
                                                                                 args.seq_len, args.seq_gap, 
                                                                                 args.batch_size,int(args.lr * 100000))
 
-    args.data_root += args.dataset + '/'
-    args.save_root += args.dataset + '/'
+    
+    
 
     num_feat_multiplier = {'CAT': 2, 'SUM': 1, 'MEAN': 1, 'NONE': 1}
     # fusion type can one of the above keys
@@ -148,14 +147,17 @@ def main():
 
     
     if args.fusion:
-        base_weights = torch.load(args.save_root +'/weights/AMTNet_single_stream_{}_s{}.pth'.format(args.input_type_base, args.train_split))
-        extra_weights = torch.load(args.save_root + '/weights/AMTNet_single_stream_{}_s{}.pth'.format(args.input_type_extra, args.train_split))
+        base_weights = torch.load(args.data_root +'/weights/AMTNet_single_stream_{}_s{}.pth'.format(args.input_type_base, args.train_split))
+        extra_weights = torch.load(args.data_root + '/weights/AMTNet_single_stream_{}_s{}.pth'.format(args.input_type_extra, args.train_split))
         print('Loading base network...')
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
         net.core_extra.load_my_state_dict(extra_weights, input_frames=args.input_frames_extra)
     else:
-        base_weights = torch.load(args.save_root +'/weights/vgg_ucf24_{}_s{}.pth'.format(args.input_type_base, args.train_split))
+        base_weights = torch.load(args.data_root +'/weights/vgg_ucf24_{}_s{}.pth'.format(args.input_type_base, args.train_split))
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
+    
+    args.data_root += args.dataset + '/'
+    args.save_root += args.dataset + '/'
 
     net = net.cuda()
 
@@ -170,7 +172,7 @@ def main():
             xavier(m.weight.data)
             m.bias.data.zero_()
 
-    print('Initializing weights for extra layers and HEADs...')
+    print('Initializing weights for HEADs...')
     net.loc.apply(weights_init)
     net.conf.apply(weights_init)
 
@@ -240,9 +242,7 @@ def train(args, net, priors, optimizer, criterion, scheduler):
     if args.visdom:
 
         import visdom
-        viz = visdom.Visdom()
-        viz.port = args.vis_port
-        viz.env = args.exp_name
+        viz = visdom.Visdom(env=args.exp_name, port=args.vis_port)
         # initialize visdom loss plot
         lot = viz.line(
             X=torch.zeros((1,)).cpu(),
@@ -285,6 +285,7 @@ def train(args, net, priors, optimizer, criterion, scheduler):
 
         # load train data
         images, _ , prior_gt_labels, prior_gt_locations, _, _ = next(batch_iterator)
+        # images, ground_truths, _ , _, num_mt, img_indexs
         # pdb.set_trace()
         images = [img.cuda(0, non_blocking=True) for img in images if not isinstance(img, list)]
         prior_gt_labels = prior_gt_labels.cuda(0, non_blocking=True)
@@ -348,11 +349,11 @@ def train(args, net, priors, optimizer, criterion, scheduler):
                 itr_count = 0
 
 
-        if (iteration % args.eval_step == 0 or iteration in [500, args.max_iter]) and iteration>0:
+        if (iteration % args.val_step == 0 or iteration in [1000, args.max_iter]) and iteration>0:
             torch.cuda.synchronize()
             tvs = time.perf_counter()
             print('Saving state, iter:', iteration)
-            torch.save(net.state_dict(), args.save_root+'AMTNet_' +
+            torch.save(net.state_dict(), args.save_root + 'AMTNet_' +
                        repr(iteration) + '.pth')
 
             net.eval() # switch net to evaluation mode
@@ -399,7 +400,7 @@ def validate(args, net, priors, val_data_loader, val_dataset, iteration_num, iou
     count = 0
     torch.cuda.synchronize()
     ts = time.perf_counter()
-    softmax = nn.Softmax().cuda()
+    softmax = nn.Softmax(dim=2).cuda()
     with torch.no_grad():
         for val_itr in range(len(val_data_loader)):
             if not batch_iterator:
@@ -414,8 +415,12 @@ def validate(args, net, priors, val_data_loader, val_dataset, iteration_num, iou
             height, width = images[0].size(3), images[0].size(4)
 
             images = [img.cuda(0, non_blocking=True) for img in images if not isinstance(img, list)]
+
             conf_preds, loc_data = net(images)
-            conf_scores = softmax(conf_preds).clone()
+            
+            # pdb.set_trace()
+            conf_scores_all = softmax(conf_preds).clone()
+            
 
             if print_time and val_itr%val_step == 0:
                 torch.cuda.synchronize()
@@ -433,17 +438,16 @@ def validate(args, net, priors, val_data_loader, val_dataset, iteration_num, iou
                 gt[:,1] *= height
                 gt[:,3] *= height
                 gt_boxes.append(gt)
-                decoded_boxes = decode_seq(loc_data[b].data, priors, args.cfg['variance'], args.seq_len)
+                decoded_boxes = decode_seq(loc_data[b], priors, args.cfg['variance'], args.seq_len)
                 decoded_boxes = decoded_boxes[:,:4].clone()
-
+                conf_scores = conf_scores_all[b].cpu().clone()
                 #Apply nms per class and obtain the results
                 for cl_ind in range(1, num_classes):
-                    scores = conf_scores[b, :, cl_ind].squeeze()
+                    pdb.set_trace()
+                    scores = conf_scores[:, cl_ind].squeeze()
                     c_mask = scores.gt(args.conf_thresh)  # greater than minmum threshold
-                    scores = scores[c_mask].squeeze()
-                    # print('scores size',scores.size())
+                    scores = scores[c_mask].squeeze() # reduce the dimension so if no element then # of dim is 0
                     if scores.dim() == 0:
-                        # print(len(''), ' dim ==0 ')
                         det_boxes[cl_ind - 1].append(np.asarray([]))
                         continue
                     boxes = decoded_boxes.clone()

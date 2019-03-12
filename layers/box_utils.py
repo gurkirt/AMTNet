@@ -3,7 +3,7 @@ import numpy as np
 
 class MatchPrior(object):
     def __init__(self, priors, variances, seq_len=2, iou_threshold=0.5):
-        self.priors = priors
+        self.priors = priors.clone()
         self.priors_point_form = priors.clone()
         # pdb.set_trace()
         for s in range(seq_len):
@@ -15,13 +15,15 @@ class MatchPrior(object):
 
     def __call__(self, gt_boxes, gt_labels, num_mt):
             # pdb.set_trace()
+            # pdb.set_trace()
             if type(gt_boxes) is np.ndarray:
                 gt_boxes = torch.from_numpy(gt_boxes)
             if type(gt_labels) is np.ndarray:
                 gt_labels = torch.from_numpy(gt_labels)
 
             seq_overlaps =[]
-            inds = torch.LongTensor([m*self.seq_len for m in range(num_mt)])  ## get indexes of first frame in seq for each microtube
+            inds = torch.LongTensor([m*self.seq_len for m in range(num_mt)])  
+            ## get indexes of first frame in seq for each microtube
             gt_labels = gt_labels[inds]
             for s in range(self.seq_len):
                 seq_overlaps.append(jaccard(gt_boxes[inds+s, :], self.priors_point_form[:, s*4:(s+1)*4]))
@@ -29,8 +31,8 @@ class MatchPrior(object):
             overlaps = seq_overlaps[0]
             ## Compute average overlap
             for s in range(self.seq_len-1):
-                overlaps += seq_overlaps[s+1]
-            overlaps /= float(self.seq_len)
+                overlaps = overlaps + seq_overlaps[s+1]
+            overlaps = overlaps/float(self.seq_len)
             # (Bipartite Matching)
             # [1,num_objects] best prior for each ground truth
             best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
@@ -53,8 +55,8 @@ class MatchPrior(object):
                 st = gt_boxes[inds + s, :]
                 matches = st[best_truth_idx]  # Shape: [num_priors,4]
                 if s == 0:
-                    loc = encode(matches, self.priors[:, s * 4:(s + 1) * 4],
-                                self.variances)  # Shape: [num_priors, 4] -- encode the gt boxes for frame i
+                    loc = encode(matches, self.priors[:, s * 4:(s + 1) * 4], self.variances)  
+                                # Shape: [num_priors, 4] -- encode the gt boxes for frame i
                 else:
                     temp = encode(matches, self.priors[:, s * 4:(s + 1) * 4], self.variances)
                     loc = torch.cat([loc, temp], 1)  # shape: [num_priors x 4 * seql_len] : stacking the location targets for different frames
@@ -259,7 +261,7 @@ def nms(boxes, scores, overlap=0.5, top_k=200):
 
     keep = scores.new(scores.size(0)).zero_().long()
     if boxes.numel() == 0:
-        return keep
+        return keep, 0
     x1 = boxes[:, 0]
     y1 = boxes[:, 1]
     x2 = boxes[:, 2]

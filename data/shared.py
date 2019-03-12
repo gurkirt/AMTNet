@@ -89,7 +89,7 @@ def make_lists_jhmdb(rootpath, imgtype, seq_len=2, seq_gap=0, split=1, fulltest=
         step = ratios[actidx]
         if videoname not in trainvideos:
             istrain = False
-            step = max(1, ratios[actidx]) * 3
+            step = max(1, ratios[actidx]) * 1.5
 
         if fulltest:
             step = (seq_len - 1) * (seq_gap + 1)
@@ -190,7 +190,7 @@ def make_lists_ucf(rootpath, imgtype, seq_len=2, seq_gap=0, split=1, fulltest=Fa
 
             if videoname not in trainvideos:
                 istrain = False
-                step = max(1, ratios[actidx]) * 3
+                step = max(1, ratios[actidx]) * 4
 
             if fulltest:
                 step = (seq_len - 1) * (seq_gap + 1)

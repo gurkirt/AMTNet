@@ -246,4 +246,5 @@ def detection_collate(batch):
     rgb_imgs = torch.stack(rgb_imgs, 0)
     if flow_imgs[0].size(2)>1:
         flow_imgs = torch.stack(flow_imgs, 0)
+    # images, ground_truths, _ , _, num_mt, img_indexs
     return [rgb_imgs, flow_imgs], targets, torch.stack(prior_labels), torch.stack(prior_gt_locations), num_mt, image_ids
