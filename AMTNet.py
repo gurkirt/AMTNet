@@ -139,7 +139,8 @@ class SSD_CORE(nn.Module):
             print('\n\n input_frames {:d}\n\n'.format(input_frames))
             print('OWN KEYS: ', own_state.keys())
             print('Loaded KEYS: ', state_dict.keys())
-
+            pdb.set_trace()
+            
             for name, param in state_dict.items():
                 # pdb.set_trace()
                 # name = name[16:]

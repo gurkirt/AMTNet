@@ -60,8 +60,8 @@ parser.add_argument('--weight_decay', default=1e-4, type=float, help='Weight dec
 parser.add_argument('--gamma', default=0.1, type=float, help='Gamma update for SGD at for stepwise schedule')
 parser.add_argument('--visdom', default=False, type=str2bool, help='Use visdom to for loss visualization')
 parser.add_argument('--vis_port', default=8095, type=int, help='Port for Visdom Server')
-parser.add_argument('--data_root', default='/mnt/sun-gamma/', help='Location of where in data is located like images and annotation file')
-parser.add_argument('--save_root', default='/mnt/sun-gamma/', help='Location to where we wanr save the checkpoints of models')
+parser.add_argument('--data_root', default='~/data/', help='Location of where in data is located like images and annotation file')
+parser.add_argument('--save_root', default='~/cache/', help='Location to where we wanr save the checkpoints of models')
 parser.add_argument('--iou_thresh', default=0.5, type=float, help='Evaluation threshold')
 parser.add_argument('--conf_thresh', default=0.01, type=float, help='Confidence threshold for evaluation')
 parser.add_argument('--nms_thresh', default=0.45, type=float, help='NMS threshold')
@@ -72,8 +72,12 @@ args = parser.parse_args()
 
 
 import socket
+import getpass
+username = getpass.getuser()
 hostname = socket.gethostname()
+# username = socket.getusername()
 
+print('\n\n ', username, ' is using ', hostname, '\n\n')
 if hostname == 'mars':
     args.data_root = '/mnt/mars-fast/datasets/'
     args.save_root = '/mnt/mars-gamma/'
@@ -86,10 +90,10 @@ elif hostname == 'mercury':
     args.data_root = '/mnt/mercury-fast/datasets/'
     args.save_root = '/mnt/mercury-beta/'
     args.vis_port = 8098
-else:
+elif username == 'gurkirt':
     args.data_root = '/home/gurkirt/datasets/'
     args.save_root = '/home/gurkirt/cache/'
-    # args.vis_port = 8098
+    args.vis_port = 8097
     visdom=False
 # python train.py --seq_len=2 --num_workers=4 --batch_size=16 --ngpu=2 --fusion_type=NONE --input_type_base=brox --input_frames_base=5 --stepvalues=30000,50000 --max_iter=60000 --val_step=10000 --lr=0.001 
 
@@ -144,7 +148,6 @@ def main():
 
     ## DEFINE THE NETWORK
     net = AMTNet(args)
-
     
     if args.fusion:
         base_weights = torch.load(args.data_root +'/weights/AMTNet_single_stream_{}_s{}.pth'.format(args.input_type_base, args.train_split))
@@ -153,10 +156,7 @@ def main():
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
         net.core_extra.load_my_state_dict(extra_weights, input_frames=args.input_frames_extra)
     else:
-        if args.input_type_base != 'rgb':
-            vbase_weights = torch.load(args.data_root +'/weights/vgg_ucf24_{}_s{}.pth'.format('brox', args.train_split))
-        else:
-            base_weights = torch.load(args.data_root +'/weights/vgg_ucf24_{}_s{}.pth'.format(args.input_type_base, args.train_split))
+        base_weights = torch.load(args.data_root +'/weights/{}-ssd300_ucf24_120000.pth'.format(args.input_type_base))
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
     
     args.data_root += args.dataset + '/'

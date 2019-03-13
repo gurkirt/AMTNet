@@ -52,12 +52,14 @@ Please download it and extract it wherever you going to store your experiments.
 ActionDetection is a dataset loader Class in `data/dataset.py` that inherits `torch.utils.data.Dataset` making it fully compatible with the `torchvision.datasets` [API](http://pytorch.org/docs/torchvision/datasets.html).
 
 ## Training AMTNet
-- Similar to ROAD, we requires VGG-16 weights pretrained on UCF24. These weights are similiar to those produced by SSD used in ROAD. This to reduce training time. 
+- Similar to [ROAD](https://github.com/gurkirt/realtime-action-detection), we requires VGG-16 weights pretrained on UCF24 using [ROAD](https://github.com/gurkirt/realtime-action-detection) implmentation.
+- Weight of pretrained SSD used in [ROAD](https://github.com/gurkirt/realtime-action-detection) can be dowloaded from [HERE](https://drive.google.com/open?id=1AJKKCoUkpB4SZT6_L89mKyRzksCumJ4V). These weights are exactly the same to those produced by SSD used in [ROAD](https://github.com/gurkirt/realtime-action-detection). This to reduce training time. We can achived results with imagenet pretrained models as well, but with different hyper parameter, I haven't kept the track of those hyperparameters. 
+- If you want you can train for these weights using [ROAD](https://github.com/gurkirt/realtime-action-detection)
 - Training of a single stream AMTnet can be achived on single 1080Ti GPU. It takes around 8GB memory. Given pretrained weight initilisation.  
 - By default, we assume that you have downloaded the datasets and weights.    
 - To train AMTNet using the training script simply specify the parameters listed in `train.py` as a flag or manually change them in script.
 
-Let's assume that you extracted dataset in `/home/user/ucf24/` directory then your train command from the root directory of this repo is going to be: 
+Let's assume that you extracted dataset in `/home/user/data/ucf24/` directory, and weight in `/home/user/data/weights/`.  Now, your train command from the root directory of this repo is going to be: 
 
 ### RGB frames as input 
 
@@ -70,12 +72,16 @@ python train.py --seq_len=2 --num_workers=4 --batch_size=8 --ngpu=2 --fusion_typ
 python train.py --seq_len=2 --num_workers=4 --batch_size=8 --ngpu=2 --fusion_type=NONE --input_type_base=brox --input_frames_base=5 --lr=0.0005 --max_iter=70000 --stepvalues=50000 --val_step=10000
 ```
 ### Fusion
+- copy the best model trained from above training commands to  `/home/user/data/weights/`
+- OR download the above [pretrained models](https://drive.google.com/open?id=1FLJqmtPQQZ8U1032hizWOne3kalb-3X9) to above directory. 
+
 ```Shell
 python train.py --seq_len=2 --num_workers=4 --batch_size=8 --ngpu=2 --fusion_type=SUM --input_type_base=rgb --input_type_extra=brox --input_frames_base=1 --input_frames_extra=5 --lr=0.0005 --max_iter=70000 --stepvalues=50000 --val_step=10000
 ```
+
 ### Fusion notes
 * Here, we need 2 GPUs or 16GB VRAM, or reduce the batch size to 6 or 4 and learning rate to 0.0001. Not gurrented to reproduce same results but it will be close enough.
-* You can use ``CAT`` for concatnation fusion.
+* You can use ``--fusion_type=CAT`` for concatnation fusion. Sum Fusion requires little less GPU memory. 
 
 Different parameters in `train-ucf24.py` will result in different performance
 
