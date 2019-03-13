@@ -75,7 +75,7 @@ import socket
 import getpass
 username = getpass.getuser()
 hostname = socket.gethostname()
-# username = socket.getusername()
+username = socket.getusername()
 
 print('\n\n ', username, ' is using ', hostname, '\n\n')
 if hostname == 'mars':
@@ -90,7 +90,7 @@ elif hostname == 'mercury':
     args.data_root = '/mnt/mercury-fast/datasets/'
     args.save_root = '/mnt/mercury-beta/'
     args.vis_port = 8098
-elif username == 'gurkirt':
+elif username == 'gurkirt' and hostname.startswith('comp'):
     args.data_root = '/home/gurkirt/datasets/'
     args.save_root = '/home/gurkirt/cache/'
     args.vis_port = 8097

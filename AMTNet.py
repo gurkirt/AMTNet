@@ -139,22 +139,33 @@ class SSD_CORE(nn.Module):
             print('\n\n input_frames {:d}\n\n'.format(input_frames))
             print('OWN KEYS: ', own_state.keys())
             print('Loaded KEYS: ', state_dict.keys())
-            pdb.set_trace()
+            # pdb.set_trace()
             
             for name, param in state_dict.items():
                 # pdb.set_trace()
                 # name = name[16:]
                 if name in own_state.keys():
                     # print(name)
+                    match = False
+                    
+                    own_size = own_state[name].size()
+                    
+                    
                     if isinstance(param, Parameter):
                         param = param.data
-                    try:
+                    param_size = param.size()
+                    
+                    if param_size[1] == own_size[1]:
                         own_state[name].copy_(param)
-                    except Exception:
-                        raise RuntimeError('While copying the parameter named {}, '
-                                           'whose dimensions in the model are {} and '
-                                           'whose dimensions in the checkpoint are {}.'
-                                           .format(name, own_state[name].size(), param.size()))
+                    else:
+                        param = param.repeat(1, int(own_size[1]/param_size[1]) 1, 1)/float(int(own_size[1]/param_size[1]))
+                        wn_state[name].copy_(param)
+            
+
+                        # raise RuntimeError('While copying the parameter named {}, '
+                        #                    'whose dimensions in the model are {} and '
+                        #                    'whose dimensions in the checkpoint are {}.'
+                        #                    .format(name, own_state[name].size(), param.size()))
                 else:
                     print('NAME IS NOT IN OWN STATE::>' + name)
             # pdb.set_trace()
