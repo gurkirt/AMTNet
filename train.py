@@ -75,7 +75,6 @@ import socket
 import getpass
 username = getpass.getuser()
 hostname = socket.gethostname()
-username = socket.getusername()
 
 print('\n\n ', username, ' is using ', hostname, '\n\n')
 if hostname == 'mars':

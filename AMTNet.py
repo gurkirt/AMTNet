@@ -154,18 +154,17 @@ class SSD_CORE(nn.Module):
                     if isinstance(param, Parameter):
                         param = param.data
                     param_size = param.size()
-                    
-                    if param_size[1] == own_size[1]:
-                        own_state[name].copy_(param)
-                    else:
-                        param = param.repeat(1, int(own_size[1]/param_size[1]) 1, 1)/float(int(own_size[1]/param_size[1]))
-                        wn_state[name].copy_(param)
-            
-
-                        # raise RuntimeError('While copying the parameter named {}, '
-                        #                    'whose dimensions in the model are {} and '
-                        #                    'whose dimensions in the checkpoint are {}.'
-                        #                    .format(name, own_state[name].size(), param.size()))
+                    try:
+                        if len(param_size)>2 and  param_size[1] != own_size[1]:
+                            param = param.repeat(1, int(own_size[1]/param_size[1]), 1, 1)/float(own_size[1]/param_size[1])
+                            own_state[name].copy_(param)
+                        else:
+                            own_state[name].copy_(param)
+                    except Exception:
+                        raise RuntimeError('While copying the parameter named {}, '
+                                           'whose dimensions in the model are {} and '
+                                           'whose dimensions in the checkpoint are {}.'
+                                           .format(name, own_state[name].size(), param.size()))
                 else:
                     print('NAME IS NOT IN OWN STATE::>' + name)
             # pdb.set_trace()
