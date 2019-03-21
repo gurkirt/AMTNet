@@ -33,7 +33,6 @@ class MultiboxLoss(nn.Module):
             mask = box_utils.hard_negative_mining(loss, labels, self.neg_pos_ratio)
         
         # pdb.set_trace()
-
         confidence = confidence[mask, :]
         classification_loss = F.cross_entropy(confidence.reshape(-1, num_classes), labels[mask], reduction='sum')
         pos_mask = labels > 0

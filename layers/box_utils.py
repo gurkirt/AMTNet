@@ -13,9 +13,10 @@ class MatchPrior(object):
         self.iou_threshold = iou_threshold
 
 
-    def __call__(self, gt_boxes, gt_labels, num_mt):
+    def __call__(self, gt_boxes, gt_labels, num_mt=1):
             # pdb.set_trace()
             # pdb.set_trace()
+            # num_mt = =len(gt_labels)
             if type(gt_boxes) is np.ndarray:
                 gt_boxes = torch.from_numpy(gt_boxes)
             if type(gt_labels) is np.ndarray:
@@ -76,6 +77,7 @@ def hard_negative_mining(loss, labels, neg_pos_ratio):
         labels (N, num_priors): the labels.
         neg_pos_ratio:  the ratio between the negative examples and positive examples.
     """
+    
     pos_mask = labels > 0
     num_pos = pos_mask.long().sum(dim=1, keepdim=True)
     num_neg = num_pos * neg_pos_ratio

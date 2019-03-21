@@ -121,12 +121,12 @@ def main():
     args.loss_reset_step = 30
     # args.val_step = 30000
     args.print_step = 10
-    args.fusion_type = args.fusion_type.upper()
-    args.fusion = args.fusion_type in ['SUM','CAT','MEAN']
+    args.fusion_type = args.fusion_type.lower()
+    args.fusion = args.fusion_type in ['sum','cat','mean']
     ## Define the experiment Name will used for save directory and ENV for visdom
     if not args.fusion:
         args.exp_name = 'AMTNet-{}-s{:d}-{}-sl{:02d}sg{:02d}-bs{:02d}-lr{:05d}'.format(args.dataset, args.train_split,
-                                                                                args.input_type_base.upper(),
+                                                                                args.input_type_base,
                                                                                 args.seq_len, args.seq_gap, 
                                                                                 args.batch_size, int(args.lr * 100000))
     else:
@@ -139,7 +139,7 @@ def main():
     
     
 
-    num_feat_multiplier = {'CAT': 2, 'SUM': 1, 'MEAN': 1, 'NONE': 1}
+    num_feat_multiplier = {'cat': 2, 'sum': 1, 'mean': 1, 'none': 1}
     # fusion type can one of the above keys
     args.fmd = [512, 1024, 512, 256, 256, 256]
     args.kd = 3
