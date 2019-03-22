@@ -149,8 +149,8 @@ def main():
     net = AMTNet(args)
     
     if args.fusion:
-        base_weights = torch.load(args.data_root +'/weights/AMTNet_single_stream_{}_s{}.pth'.format(args.input_type_base, args.train_split))
-        extra_weights = torch.load(args.data_root + '/weights/AMTNet_single_stream_{}_s{}.pth'.format(args.input_type_extra, args.train_split))
+        base_weights = torch.load(args.data_root +'/weights/AMTNet_single_stream_{:s}_s{:02d}.pth'.format(args.input_type_base, args.train_split))
+        extra_weights = torch.load(args.data_root + '/weights/AMTNet_single_stream_{:s}_s{:02d}.pth'.format(args.input_type_extra, args.train_split))
         print('Loading base network...')
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
         net.core_extra.load_my_state_dict(extra_weights, input_frames=args.input_frames_extra)
