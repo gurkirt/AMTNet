@@ -136,21 +136,21 @@ class SSD_CORE(nn.Module):
         def load_my_state_dict(self, state_dict, input_frames=1):
 
             own_state = self.state_dict()
-            print('\n\n input_frames {:d}\n\n'.format(input_frames))
-            print('OWN KEYS: ', own_state.keys())
-            print('Loaded KEYS: ', state_dict.keys())
+            # print('\n\n input_frames {:d}\n\n'.format(input_frames))
+            # print('OWN KEYS: ', own_state.keys())
+            # print('Loaded KEYS: ', state_dict.keys())
             # pdb.set_trace()
             
             for name, param in state_dict.items():
+                name1 = name.split('.')
+                name2 = '.'.join(name1[2:])
                 # pdb.set_trace()
-                # name = name[16:]
-                if name in own_state.keys():
+                if name in own_state.keys() or name2 in own_state.keys():
+                    if name2 in own_state.keys():
+                        name = name2
                     # print(name)
                     match = False
-                    
                     own_size = own_state[name].size()
-                    
-                    
                     if isinstance(param, Parameter):
                         param = param.data
                     param_size = param.size()
@@ -218,6 +218,7 @@ class AMTNet(nn.Module):
         if self.fusion:
             pooled_extra = self.core_extra(x[1])
             # apply multibox head to source layers
+            # pdb.set_trace()
             for (x1, x2, l, c) in zip(pooled_base, pooled_extra, self.loc, self.conf):
                 # print('x_norm', x.norm())
                 # pdb.set_trace()
@@ -230,7 +231,7 @@ class AMTNet(nn.Module):
                 else:
                     raise Exception('Supply correct fusion type')
                 locs = l(x)
-                locs.view(locs.size(0), -1)
+                locs = locs.view(locs.size(0), -1)
                 loc.append(locs)
                 
                 confs = c(x)

@@ -48,8 +48,8 @@ parser.add_argument('--input_frames_base', default=1, type=int, help='Number of 
 parser.add_argument('--input_frames_extra', default=5, type=int, help='Number of input frame, default for flow is 5')
 parser.add_argument('--jaccard_threshold', default=0.5, type=float, help='Min Jaccard index for matching')
 parser.add_argument('--batch_size', default=4, type=int, help='Batch size for training')
-parser.add_argument('--num_workers', default=4, type=int, help='Number of workers used in dataloading')
-parser.add_argument('--max_iter', default=300000, type=int, help='Number of training iterations')
+parser.add_argument('--num_workers','-j', default=4, type=int, help='Number of workers used in dataloading')
+parser.add_argument('--max_iter', default=40000, type=int, help='Number of training iterations')
 parser.add_argument('--val_step', default=10000, type=int, help='Number of training iterations')
 parser.add_argument('--cuda', default=1, type=str2bool, help='Use cuda to train model')
 parser.add_argument('--ngpu', default=1, type=int, help='Use cuda to train model')
@@ -149,8 +149,8 @@ def main():
     net = AMTNet(args)
     
     if args.fusion:
-        base_weights = torch.load(args.data_root +'/weights/AMTNet_single_stream_{:s}_s{:02d}.pth'.format(args.input_type_base, args.train_split))
-        extra_weights = torch.load(args.data_root + '/weights/AMTNet_single_stream_{:s}_s{:02d}.pth'.format(args.input_type_extra, args.train_split))
+        base_weights = torch.load(args.save_root +'weights/AMTNet_single_stream_{:s}_s{:02d}.pth'.format(args.input_type_base, args.train_split))
+        extra_weights = torch.load(args.save_root + '/weights/AMTNet_single_stream_{:s}_s{:02d}.pth'.format(args.input_type_extra, args.train_split))
         print('Loading base network...')
         net.core_base.load_my_state_dict(base_weights, input_frames=args.input_frames_base)
         net.core_extra.load_my_state_dict(extra_weights, input_frames=args.input_frames_extra)
